@@ -1,0 +1,332 @@
+from datetime import datetime, date, timedelta
+from typing import List
+
+from sqlalchemy import Boolean, ForeignKey, MetaData, Table, Column, select, or_, and_, Engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, Session
+from sqlalchemy.orm import mapped_column
+from sqlalchemy.types import String, Integer, Date, Numeric
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Compte(Base):
+    __tablename__ = 'compte_types'
+
+    compte: Mapped[str] = mapped_column('compte', String, primary_key=True, nullable=False)
+    compte_minuscule: Mapped[str] = mapped_column('Compte Minuscule', String)
+    compte_type: Mapped[str] = mapped_column('compte_type', String, nullable=False)
+    compte_actif: Mapped[bool] = mapped_column('compte_actif', Boolean, nullable=True)
+
+    mouvements: Mapped[List["Mouvement"]] = relationship(back_populates="compte_object", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"Compte Nom={self.compte!r}, Minuscule={self.compte_minuscule!r}, Type={self.compte_type!r}"
+
+
+class Categorie(Base):
+    __tablename__ = 'categories_groupes'
+
+    categorie: Mapped[str] = mapped_column('catégorie', String, primary_key=True)
+    categorie_groupe: Mapped[str] = mapped_column('catégorie_groupe', String)
+    categorie_order: Mapped[int] = mapped_column('catégorie_order', Integer)
+    provision_type: Mapped[str] = mapped_column('provision_type', String)
+
+    mouvements: Mapped[List["Mouvement"]] = relationship(back_populates="categorie_object",
+                                                         cascade="all, delete-orphan")
+    maps: Mapped[List["MapCategorie"]] = relationship(back_populates="categorie_object", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"Catégorie Nom={self.categorie.ljust(30, ' ')}, Groupe={self.categorie_groupe!r}, Ordre={self.categorie_order!r}, Type Provision={self.provision_type!r}"
+
+
+class Job(Base):
+    __tablename__ = 'jobs'
+
+    type_salary = 'salaire'
+    type_import = 'import'
+    type_split = 'split'
+    type_shut = 'shutdown'
+    type_provision = 'provision'
+
+    job_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_key: Mapped[str]
+    job_timestamp: Mapped[datetime]
+    job_mois: Mapped[datetime] = mapped_column(Date, nullable=True)
+
+    mouvements: Mapped[List["Mouvement"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f'Job of type {self.job_key}, id {self.job_id!r}, timestamp {self.job_timestamp!r}'
+
+
+class Mouvement(Base):
+    __tablename__ = 'comptes'
+
+    index: Mapped[int] = mapped_column('index', Integer, primary_key=True)
+    date: Mapped[datetime] = mapped_column('Date', Date, nullable=True)
+    description: Mapped[str] = mapped_column('Description', String)
+    recette: Mapped[float] = mapped_column('Recette', Numeric, nullable=True)
+    depense: Mapped[float] = mapped_column('Dépense', Numeric, nullable=True)
+    compte: Mapped[str] = mapped_column('Compte', ForeignKey('compte_types.compte'), nullable=True)
+    categorie: Mapped[str] = mapped_column('Catégorie', ForeignKey('categories_groupes.catégorie'))
+    economie: Mapped[str] = mapped_column('Economie', String, nullable=True, default='false')
+    regle: Mapped[str] = mapped_column('Réglé', String, nullable=True, default='false')
+    mois: Mapped[datetime] = mapped_column('Mois', Date, comment='Le mois auquel se réfère la transaction')
+    date_insertion: Mapped[datetime] = mapped_column("Date insertion", Date)
+    provision_payer: Mapped[float] = mapped_column('Provision à payer', Numeric, nullable=True)
+    provision_recuperer: Mapped[float] = mapped_column('Provision à récupérer', Numeric, nullable=True)
+    date_remboursement: Mapped[datetime] = mapped_column('Date remboursement', Date, nullable=True)
+    organisme: Mapped[str] = mapped_column('Organisme', String, nullable=True)
+    date_out_of_bound: Mapped[bool] = mapped_column('Date Out of Bound', Boolean, nullable=True, default=False)
+    taux_remboursement: Mapped[float] = mapped_column('Taux remboursement', Numeric, nullable=True)
+    fait_marquant: Mapped[str] = mapped_column('Fait marquant', String, nullable=True)
+    no: Mapped[int] = mapped_column('No', Integer)
+    no_de_reference: Mapped[str] = mapped_column('Numéro de référence', String, nullable=True)
+    index_parent: Mapped[int] = mapped_column('index parent', Integer, nullable=True, comment='Parent transaction')
+    depense_initiale: Mapped[float] = mapped_column('Dépense initiale', Numeric, nullable=True,
+                                                    comment="La dépense d'origine")
+    recette_initiale: Mapped[float] = mapped_column('Recette initiale', Numeric, nullable=True,
+                                                    comment="La recette d'origine")
+    label_utilisateur: Mapped[str] = mapped_column('Label utilisateur', String, nullable=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey('jobs.job_id'))
+    declarant: Mapped[str] = mapped_column('déclarant', String, nullable=True,
+                                           comment="Désigne le déclarant pour un contexte d'impôts")
+
+    compte_object: Mapped[Compte] = relationship(back_populates="mouvements")
+    categorie_object: Mapped[Categorie] = relationship(back_populates="mouvements")
+    job: Mapped[Job] = relationship(back_populates="mouvements")
+
+    def __repr__(self):
+        if self.compte == None:
+            typ = 'Provision'
+        elif self.categorie == None:
+            typ = 'Virement'
+        else:
+            typ = 'Transaction'
+        solde = self.recette if self.recette != None else 0
+        solde = solde - self.depense if self.depense != None else solde
+
+        return f'{typ} {self.description!r}, Compte : {self.compte}, Catégorie : {self.categorie}, Solde : {solde}, Provisions : {self.provision_recuperer}'
+
+
+class MapCategorie(Base):
+    __tablename__ = 'map_categories'
+
+    keyword: Mapped[str] = mapped_column('Keyword', String, primary_key=True,
+                                         comment="Le mot-clé à chercher dans la transaction")
+    categorie: Mapped[str] = mapped_column('Catégorie', ForeignKey('categories_groupes.catégorie'),
+                                           comment="La catégorie sur laquelle on va mapper la transaction")
+
+    categorie_object: Mapped[Categorie] = relationship(back_populates='maps')
+
+    def __repr__(self):
+        return f'Map {self.keyword} to {self.categorie}'
+
+
+class MapOrganisme(Base):
+    __tablename__ = 'map_organismes'
+
+    keyword: Mapped[str] = mapped_column('Keyword', String, primary_key=True,
+                                         comment="Le mot-clé à chercher dans la transaction")
+    organisme: Mapped[str] = mapped_column('Organisme', String,
+                                           comment="Organisme qui fournit une prestation de remboursement médical")
+
+    def __repr__(self):
+        return f'Map Organisme : keyword {self.keyword} to {self.organisme}'
+
+
+class Salaire(Base):
+    __tablename__ = 'salaires'
+
+    index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    categorie: Mapped[str] = mapped_column(String)
+    poste: Mapped[str] = mapped_column(String)
+    mois: Mapped[datetime] = mapped_column(Date)
+    valeur: Mapped[str] = mapped_column(String, nullable=True)
+    valeur_numerique: Mapped[datetime] = mapped_column('Valeur Numérique', Numeric, nullable=True)
+
+
+def get_comptes(s: Session):
+    """ Returns a list of accounts """
+    return s.scalars(select(Compte).order_by(Compte.compte)).all()
+
+
+def get_categories(s: Session):
+    """ Returns a list of categories"""
+    return s.scalars(select(Categorie).order_by(Categorie.categorie)).all()
+
+
+def get_soldes(s: Session, type_compte: str):
+    """ Returns the current accounts"""
+    metadata_obj = MetaData()
+    soldes = Table('view_solde_actuel',
+                   metadata_obj,
+                   Column('Compte', String),
+                   Column('Type Compte', String),
+                   Column('Date', Date),
+                   Column('Solde Compte Actuel', Numeric),
+                   schema='dbview_schema'
+                   )
+    result = s.execute(select(soldes.c["Compte"], soldes.c["Date"], soldes.c["Solde Compte Actuel"]).where(
+        soldes.c['Type Compte'] == type_compte)).all()
+
+    return result
+
+
+def get_salaries(s: Session, mois: date = None) -> list:
+    """ calls the salaries and provides a list of values"""
+    metadata_obj = MetaData()
+    salaires = Table('view_salaires_nets',
+                     metadata_obj,
+                     Column('mois', Date),
+                     Column('salaire_net', Numeric),
+                     Column('prime_net', Numeric),
+                     Column('impot_salaire', Numeric),
+                     Column('impot_prime', Numeric),
+                     Column('logement', Numeric),
+                     Column('autre', Numeric),
+                     Column('total', Numeric),
+                     schema='dbview_schema')
+
+    if mois == None:
+        result = s.execute(select(salaires))
+        return [{c.key: r[i] for i, c in enumerate(salaires.columns)} for r in result]
+    else:
+        result = s.execute(select(salaires).where(salaires.c['mois'] == mois)).first()
+        try:
+            return {c.key: result[i] for i, c in enumerate(salaires.columns)}
+        except IndexError:
+            raise IndexError(f'could not find a salary for month : {mois}')
+
+
+def get_max_number(s: Session) -> int:
+    result = s.scalar(select(Mouvement.no).order_by(Mouvement.no.desc()))
+    return int(result)
+
+
+def get_salary_transaction(s: Session, amount: float, mois: date) -> Mouvement:
+    salaire_transaction = s.scalar(
+        select(Mouvement).where(and_(or_(Mouvement.recette == amount, Mouvement.recette_initiale == amount)),
+                                (Mouvement.mois == mois)))
+
+    # and (Mouvement.mois == mois)
+    return salaire_transaction
+
+def get_transaction(session: Session, index: int) -> Mouvement:
+    return session.scalar(select(Mouvement).where(Mouvement.index == index))
+
+
+def deactivate_transaction(e: Engine, index: int):
+    with Session(e) as session:
+        mvt = session.scalar(select(Mouvement).where(Mouvement.index == index))
+        if not mvt is None:
+            mvt.date_out_of_bound = True
+            session.commit()
+
+
+def update_transaction_category(e: Engine, index: int, cat: str, lab: str, mois: date):
+    with Session(e) as session:
+        mvt = session.scalar(select(Mouvement).where(Mouvement.index == index))
+        if not mvt is None:
+            mvt.categorie = cat
+            mvt.label_utilisateur = lab
+            mvt.mois = mois
+            session.commit()
+
+
+def get_remaining_provisioned_expenses(s: Session):
+    """ function to get an ordered list of remaining provisioned expenses
+    :returns: set of tuples (Mois, Catégorie, Dépenses Courante Provisionnée Non Epuisée)"""
+    metadata_obj = MetaData()
+    remaining_table = Table('view_bilans_agregation',
+                            metadata_obj,
+                            Column('Mois', Date),
+                            Column('Catégorie', String),
+                            Column('Dépense Courante Provisionnée non épuisée', Numeric),
+                            Column('Recette Economisée Provisionnée restante', Numeric),
+                            schema='dbview_schema')
+
+    results = s.execute(
+        select(remaining_table).where(
+            and_(
+                remaining_table.c['Dépense Courante Provisionnée non épuisée'] > 0,
+                remaining_table.c['Mois'] < date.today() - timedelta(days=date.today().day - 1),
+                remaining_table.c['Dépense Courante Provisionnée non épuisée'] != remaining_table.c[
+                    'Recette Economisée Provisionnée restante']
+            )).order_by(remaining_table.c['Mois'].desc())
+    )
+    return results
+
+
+def close_provision(s: Session, mois: date, category: str, remaining: float):
+    # and we create a transaction for it.
+    # Create a new job
+    job = Job(job_key=Job.type_shut, job_timestamp=datetime.now())
+    s.add(Mouvement(date=date.today(),
+                    description='Automatic closing of provision',
+                    categorie=category,
+                    mois=mois,
+                    date_insertion=date.today(),
+                    provision_payer=-remaining,
+                    no=0,
+                    job=job
+                    ))
+    print(f'Mouvement créé. Committing...')
+    # end
+    s.flush()
+    s.commit()
+
+def import_transaction(e: Engine, mvt: Mouvement):
+    """ Generates a transaction"""
+    print(f'Importing transaction {mvt}')
+    with Session(e) as session:
+        # retrieve the last valid number
+        max_number = get_max_number(session)
+        # create a job
+        job = Job(job_key=Job.type_import, job_timestamp=datetime.now())
+        # assign the movement
+        mvt.job = job
+        # add the metadata
+        mvt.no = max_number
+        mvt.date_insertion = date.today()
+        session.add(mvt)
+        print(f'Transaction generated')
+
+        session.flush()
+        session.commit()
+
+
+def create_transaction(e: Engine, transaction_date: date, description: str, compte: str, category: str,
+                       depense: float, recette: float, transaction_month: date):
+    """ generate a set of provision for a given year"""
+    print(f'Generating a transaction for {category} with description {description}')
+
+    with Session(e) as session:
+        # retrieve the last valid number
+        max_number = get_max_number(session)
+        # create a job
+        job = Job(job_key=Job.type_import, job_timestamp=datetime.now())
+        # generate a set of provisions
+        mvt = Mouvement(date=transaction_date,
+                        description=description,
+                        compte=compte,
+                        categorie=category,
+                        mois=transaction_month,
+                        date_insertion=date.today(),
+                        depense=depense,
+                        recette=recette,
+                        no=max_number + 1,
+                        job=job
+                        )
+        session.add(mvt)
+        print(f'Transaction generated : {mvt}')
+
+        session.flush()
+        session.commit()
+
+def import_keyword(e: Engine, value: MapCategorie):
+    with Session(e) as session:
+        session.add(value)
+        session.commit()
