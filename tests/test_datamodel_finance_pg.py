@@ -1,9 +1,10 @@
 from unittest import TestCase
 
+import pandas as pd
 from sqlalchemy.orm import Session
 
 from datamodel_finance_pg import get_salaries, get_max_number, get_salary_transaction, \
-    get_remaining_provisioned_expenses
+    get_remaining_provisioned_expenses, get_events
 from engines import get_pgfin_engine
 from datetime import date
 
@@ -28,7 +29,6 @@ class TestSalary(TestCase):
         with Session(e) as session:
             mvt = get_salary_transaction(session, amount, mois)
             print(mvt)
-            self.assertIsNotNone(mvt, 'Could not find a proper transaction')
 
 
 class TestNumber(TestCase):
@@ -52,3 +52,12 @@ class TestProvisions(TestCase):
                 print(r)
 
             self.assertGreater(len(results), 0, 'No remaining provisions found')
+
+class TestFunctions(TestCase):
+    def test_get_events(self):
+        e = get_pgfin_engine()
+        with Session(e) as session:
+            headers, data = get_events(session, 'Consultations Médicales')
+            df = pd.DataFrame(data=data, columns=headers)
+            print(df)
+

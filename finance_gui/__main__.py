@@ -9,7 +9,7 @@ import pandas as pd
 
 from datamodel_finance_pg import get_remaining_provisioned_expenses, get_soldes, close_provision, \
     deactivate_transaction, get_categories, get_comptes, Mouvement, \
-    import_transaction, MapCategorie, import_keyword, get_transaction
+    import_transaction, MapCategorie, import_keyword, get_transaction, get_events
 from finance_orm_cli.masterdata import split_mouvement
 
 # Connexion à la base de données PostgreSQL
@@ -32,7 +32,7 @@ def fetch_mouvements(offset=0, search_filter="", sort_column=None, sort_order="a
     if not compte_filter is None:
         query += f' AND c."Compte" = \'{compte_filter}\''
     if reimbursable:
-        query += f' AND c."Dépense" > 0 AND (c."Taux remboursement IS NULL OR c."Label utilisateur" IS NULL or c."Date remboursement" IS NULL)'
+        query += f' AND c."Dépense" > 0 AND (c."Taux remboursement" IS NULL OR c."Label utilisateur" IS NULL or c."Date remboursement" IS NULL)'
     if affectable:
         query += f' AND c."Recette" > 0 AND (c."Label utilisateur" IS NULL or c."Date remboursement" IS NULL)'
     if sort_column:
@@ -46,6 +46,16 @@ def fetch_mouvements(offset=0, search_filter="", sort_column=None, sort_order="a
     df['Solde'] = df['Recette'] - df['Dépense']
     df['Provision'] = df['Provision à récupérer'] - df['Provision à payer']
     df.drop(['Dépense', 'Recette', 'Provision à récupérer', 'Provision à payer'], axis=1, inplace=True)
+    return df
+
+
+def fetch_events(category_filter: str) -> pd.DataFrame:
+    """ Récupère les 50 premières lignes des événements"""
+    with Session(engine) as session:
+        headers, data = get_events(session, category_filter)
+
+    df = pd.DataFrame(data=data, columns=headers)
+    df[["Dépense", "Recette"]] = df[["Dépense", "Recette"]].map(lambda x: f"{x:.2f} €" if x else "")
     return df
 
 
@@ -83,10 +93,93 @@ def common_cancel_button() -> sg.Button:
     return sg.Button("❌ Annuler", size=(10, 1), button_color=("white", "red"), key="-ANNULER-")
 
 
+def link_transaction(editable: Mouvement) -> Mouvement:
+    """ Function that enables to link a transaction to a common event and label
+    Also, it is possible to set the reimbursement ratio"""
+    # Data
+    df = fetch_events(editable.categorie)
+    headers =  ('Date', 'Evénement', 'Dépense', 'Recette')
+
+    # parameters
+    is_expense = editable.depense is not None and editable.depense > 0
+
+    if is_expense:
+
+        taux = str(round(editable.taux_remboursement * 100, 2)) if editable.taux_remboursement else 0
+        expected = str(round(editable.depense * editable.taux_remboursement, 2)) if editable.taux_remboursement else 0
+
+        layout = [[sg.Text("Taux de remboursement (%) : "),
+                   sg.Input(key='-TAUX-', size=(10, 1), default_text=taux, enable_events=True)],
+                  [sg.Text("Remboursement attendu : "), sg.Text(expected, text_color="blue", key='-EXPECTED-')]]
+    else:
+        layout = []
+
+    dt_remb = ''
+    if editable.date_remboursement is not None:
+        dt_remb = editable.date_remboursement.strftime('%Y-%m-%d')
+    label = ''
+    if editable.label_utilisateur is not None:
+        label = editable.label_utilisateur
+
+    layout += [
+        [sg.Text("Date d'événement :", size=(15, 1)),
+         sg.Input(key="-DATE-", size=(12, 1), default_text=dt_remb),
+         sg.CalendarButton("📅", target="-DATE-", format="%Y-%m-%d")],
+        [sg.Text("Libellé : ", size=(15, 1)),
+         sg.Input(key="-LABEL-", size=(50, 1), default_text=label)],
+        [sg.HorizontalSeparator()],
+        [sg.Table(values=df.values.tolist(), headings=headers, key='-EVENTS-', enable_events=True,
+                  justification="center", auto_size_columns=True,
+                  num_rows=10, enable_click_events=True)],
+        [sg.HorizontalSeparator()],
+        [common_valider_button(), common_cancel_button()]
+    ]
+
+    # Build the window
+    window = sg.Window(f"Liez une transaction à un événement, catégorie {editable.categorie}", layout, modal=True,
+                       element_justification="left",
+                       font=("Arial", 12))
+
+    # Listen to the events
+    while True:
+        event, values = window.read()
+
+        if event in (sg.WIN_CLOSED, "-ANNULER-"):
+            window.close()
+            return None
+        elif event == '-TAUX-':
+            try:
+                new_taux = float(values['-TAUX-']) / 100 if values['-TAUX-'] else 0
+                new_expected = new_taux * float(editable.depense)
+                window['-EXPECTED-'].update(str(new_expected))
+            except ValueError:
+                sg.popup_error("❌ Veuillez entrer des montants valides !", font=("Arial", 12), text_color="red")
+
+        elif event == '-VALIDER-':
+            # retrieve all the values, and try to save
+            try:
+                if is_expense:
+                    if values['-TAUX-']:
+                        new_taux = float(values['-TAUX-']) / 100
+                        new_expected = new_taux * float(editable.depense)
+                        editable.taux_remboursement = new_taux
+                        editable.provision_recuperer = new_expected
+                if values['-DATE-']:
+                    editable.date_remboursement = datetime.date.fromisoformat(values['-DATE-'])
+                if values['-LABEL-']:
+                    editable.label_utilisateur = values['-LABEL-']
+                window.close()
+                return editable
+            except:
+                sg.popup_error("❌ Veuillez entrer des montants valides !", font=("Arial", 12), text_color="red")
+
+
 def show_transaction_editor(editable: Mouvement) -> Mouvement:
     # retrieve the comptes
-    depense_text = str(round(editable.depense, 2))
-    recette_text = str(round(editable.recette, 2))
+    if editable.depense:
+        depense_text = str(round(editable.depense, 2))
+    if editable.recette:
+        recette_text = str(round(editable.recette, 2))
     layout = [
         [sg.Text("Catégorie :", size=(15, 1)), common_category_combo(editable.categorie)],
         [sg.Text("Label utilisateur :", size=(15, 1)),
@@ -285,7 +378,6 @@ def main():
     # Définition des variables d'état
     offset = 0
     df = fetch_mouvements(sort_column="index", sort_order="desc")
-    selected_row = -1
     category_filter = None
     compte_filter = None
     desc_filter = None
@@ -303,8 +395,9 @@ def main():
          common_category_combo(),
          common_compte_combo(),
          sg.Button("Reimbursable Expenses", size=(20, 1), key="-REIMBURSABLE-"),
-         sg.Button("Affectable Payments", size=(20,1), key='-AFFECTABLE-'),
-         sg.InputText(key='-FILTER-', size=(20, 1), enable_events=True),
+         sg.Button("Affectable Payments", size=(20, 1), key='-AFFECTABLE-'),
+         sg.InputText(key='-FILTER-', size=(20, 1)),
+         sg.Button("%", key='-APPLY-FILTER-'),
          sg.Button("✖ Clear", key="-CLEAR-")
          ],
         [sg.Table(values=df.values.tolist(), headings=list(df.columns), key="-MVTS-", enable_events=True,
@@ -317,6 +410,7 @@ def main():
              [sg.Button("Deactivate", size=(15, 1))],
              [sg.Button("Edit", size=(15, 1))],
              [sg.Button("Add Keyword", size=(15, 1))],
+             [sg.Button("Link", size=(15, 1))],
              [sg.InputText(default_text="2", key='-SPLIT-COUNT-', size=(10, 1))],
              [sg.Button("Split Custom", size=(15, 1))],
              [sg.Button("Split Yearly", size=(15, 1))]], element_justification='top')
@@ -333,14 +427,6 @@ def main():
     while True:
         event, values = window.read()
         update_values = False
-        if selected_row > -1:
-            index = int(df.iloc[selected_row, 0])
-            description = df.iloc[selected_row, 1]
-            label_utilisateur = df.iloc[selected_row, 2]
-            category = df.iloc[selected_row, 3]
-            mois = df.iloc[selected_row, 5]
-        else:
-            index = -1
 
         if event in (sg.WIN_CLOSED, "Quitter"):
             break
@@ -360,13 +446,13 @@ def main():
         elif event == "-COMPTE-":
             compte_filter = values["-COMPTE-"]
             update_values = True
-        elif event == '-REIMBURSABLE':
+        elif event == '-REIMBURSABLE-':
             reimbursable_filter = True
             update_values = True
         elif event == '-AFFECTABLE-':
             affectable_filter = True
             update_values = True
-        elif event == '-FILTER-':
+        elif event == '-APPLY-FILTER-':
             desc_filter = values["-FILTER-"]
             update_values = True
         elif event == "Previous":
@@ -388,8 +474,14 @@ def main():
             row, col = event[2]  # Récupère la ligne et la colonne cliquées
             if row is None:
                 status_message = f"Pas d'index sélectionné"
+                index = -1
             elif row >= 0:
-                selected_row = row
+                index = int(df.iloc[row, 0])
+                description = df.iloc[row, 1]
+                label_utilisateur = df.iloc[row, 2]
+                category = df.iloc[row, 3]
+                mois = df.iloc[row, 5]
+
                 status_message = f"Index sélectionné: {df.iloc[row, 0]} pour {df.iloc[row, 1]}"
         elif event == "Edit":
             with Session(engine) as session:
@@ -407,10 +499,18 @@ def main():
                     status_message = f"Keyword imported for category"
                 except IntegrityError:
                     status_message = f"keyword already exists"
+        elif event == "Link":
+            with Session(engine) as session:
+                editable = get_transaction(session, index)
+                editable = link_transaction(editable)
+                if not editable is None:
+                    session.commit()
+                    status_message = "Lié à un événement"
+                    update_values = True
         elif event == "Split Custom":
             try:
                 split_periods = int(values["-SPLIT-COUNT-"])
-                index = int(df.iloc[selected_row, 0])
+                index = int(df.iloc[row, 0])
                 # Executing the split
                 split_mouvement(index, mode='custom', periods=split_periods)
                 status_message = f"Splitting custom transaction {index} in {split_periods} parts"
@@ -429,7 +529,8 @@ def main():
             update_values = True
         if update_values:
             df = fetch_mouvements(offset, desc_filter, "index", "desc", category_filter=category_filter,
-                                  compte_filter=compte_filter, reimbursable=reimbursable_filter, affectable=affectable_filter)
+                                  compte_filter=compte_filter, reimbursable=reimbursable_filter,
+                                  affectable=affectable_filter)
             window["-MVTS-"].update(values=df.values.tolist())
             soldes = fetch_soldes()
             window["-SOLDES-"].update(values=soldes)

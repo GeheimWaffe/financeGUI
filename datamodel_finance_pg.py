@@ -1,7 +1,7 @@
 from datetime import datetime, date, timedelta
 from typing import List
 
-from sqlalchemy import Boolean, ForeignKey, MetaData, Table, Column, select, or_, and_, Engine
+from sqlalchemy import Boolean, ForeignKey, MetaData, Table, Column, select, or_, and_, Engine, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, Session
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.types import String, Integer, Date, Numeric
@@ -158,6 +158,19 @@ def get_categories(s: Session):
     return s.scalars(select(Categorie).order_by(Categorie.categorie)).all()
 
 
+def get_events(s: Session, category: str = None):
+    """ returns a tuple of headers, data, for use in a dataframe"""
+    result = s.execute(select(Mouvement.date_remboursement, Mouvement.label_utilisateur,
+                              func.sum(Mouvement.depense).label("Dépense"),
+                              func.sum(Mouvement.recette).label("Recette")).where(
+        and_(Mouvement.date_remboursement != None, Mouvement.categorie == category,
+             Mouvement.date_out_of_bound == False)).group_by(
+        Mouvement.date_remboursement, Mouvement.label_utilisateur).order_by(
+        Mouvement.date_remboursement.desc()).limit(50)).all()
+    headers = ("Date Evénement", "Libellé", "Dépense", "Recette")
+    return headers, result
+
+
 def get_soldes(s: Session, type_compte: str):
     """ Returns the current accounts"""
     metadata_obj = MetaData()
@@ -213,6 +226,7 @@ def get_salary_transaction(s: Session, amount: float, mois: date) -> Mouvement:
 
     # and (Mouvement.mois == mois)
     return salaire_transaction
+
 
 def get_transaction(session: Session, index: int) -> Mouvement:
     return session.scalar(select(Mouvement).where(Mouvement.index == index))
@@ -278,6 +292,7 @@ def close_provision(s: Session, mois: date, category: str, remaining: float):
     s.flush()
     s.commit()
 
+
 def import_transaction(e: Engine, mvt: Mouvement):
     """ Generates a transaction"""
     print(f'Importing transaction {mvt}')
@@ -325,6 +340,7 @@ def create_transaction(e: Engine, transaction_date: date, description: str, comp
 
         session.flush()
         session.commit()
+
 
 def import_keyword(e: Engine, value: MapCategorie):
     with Session(e) as session:

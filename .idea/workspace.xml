@@ -7,32 +7,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="4d0817fc-6e9c-47df-b54e-19b06ec976a4" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/sqlalchemyProject.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/core_basic.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/create_schema_with_core.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/datamodel_finance_pg.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/engines.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/exploit_fixture.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/finance_cli/__main__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/finance_cli/interface.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/finance_gui/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/finance_gui/__main__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/finance_orm_cli/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/finance_orm_cli/__main__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/finance_orm_cli/masterdata.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/financedb.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/orm.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/readme.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/tests/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/tests/test_datamodel_finance_pg.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/user_model_orm.py" afterDir="false" />
+    <list default="true" id="4d0817fc-6e9c-47df-b54e-19b06ec976a4" name="Changes" comment="Added the full GUI layer">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/datamodel_finance_pg.py" beforeDir="false" afterPath="$PROJECT_DIR$/datamodel_finance_pg.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/finance_gui/__main__.py" beforeDir="false" afterPath="$PROJECT_DIR$/finance_gui/__main__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_datamodel_finance_pg.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_datamodel_finance_pg.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -62,6 +41,7 @@
   &quot;keyToString&quot;: {
     &quot;Python tests.Python tests for test_datamodel_finance_pg.Test.executor&quot;: &quot;Run&quot;,
     &quot;Python tests.Python tests for test_datamodel_finance_pg.Test.test_get_salaries.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_datamodel_finance_pg.TestFunctions.executor&quot;: &quot;Run&quot;,
     &quot;Python tests.Python tests for test_datamodel_finance_pg.TestProvisions.executor&quot;: &quot;Run&quot;,
     &quot;Python tests.Python tests for test_datamodel_finance_pg.TestSalary.executor&quot;: &quot;Run&quot;,
     &quot;Python tests.Python tests for test_datamodel_finance_pg.TestSalary.test_get_salary_transaction.executor&quot;: &quot;Run&quot;,
@@ -103,8 +83,76 @@
     </key>
   </component>
   <component name="RunManager">
+    <configuration default="true" type="PythonConfigurationType" factoryName="Python">
+      <module name="FinanceGUI" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration default="true" type="Tox" factoryName="Tox">
+      <module name="FinanceGUI" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <method v="2" />
+    </configuration>
+    <configuration default="true" type="docs" factoryName="Docutils task">
+      <module name="FinanceGUI" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="docutils_input_file" value="" />
+      <option name="docutils_output_file" value="" />
+      <option name="docutils_params" value="" />
+      <option name="docutils_task" value="" />
+      <option name="docutils_open_in_browser" value="false" />
+      <method v="2" />
+    </configuration>
+    <configuration default="true" type="docs" factoryName="Sphinx task">
+      <module name="FinanceGUI" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="docutils_input_file" value="" />
+      <option name="docutils_output_file" value="" />
+      <option name="docutils_params" value="" />
+      <option name="docutils_task" value="" />
+      <option name="docutils_open_in_browser" value="false" />
+      <method v="2" />
+    </configuration>
     <configuration name="Python tests for test_datamodel_finance_pg.Test" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
-      <module name="sqlalchemyProject" />
+      <module name="FinanceGUI" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
@@ -118,8 +166,23 @@
       <option name="_new_targetType" value="&quot;PYTHON&quot;" />
       <method v="2" />
     </configuration>
+    <configuration name="Python tests for test_datamodel_finance_pg.TestFunctions" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
+      <module name="FinanceGUI" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="_new_additionalArguments" value="&quot;&quot;" />
+      <option name="_new_target" value="&quot;test_datamodel_finance_pg.TestFunctions&quot;" />
+      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
+      <method v="2" />
+    </configuration>
     <configuration name="Python tests for test_datamodel_finance_pg.TestProvisions" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
-      <module name="sqlalchemyProject" />
+      <module name="FinanceGUI" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
@@ -134,7 +197,7 @@
       <method v="2" />
     </configuration>
     <configuration name="Python tests for test_datamodel_finance_pg.TestSalary" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
-      <module name="sqlalchemyProject" />
+      <module name="FinanceGUI" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
@@ -149,7 +212,7 @@
       <method v="2" />
     </configuration>
     <configuration name="Python tests for test_datamodel_finance_pg.TestSalary.test_get_salary_transaction" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
-      <module name="sqlalchemyProject" />
+      <module name="FinanceGUI" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
@@ -163,28 +226,47 @@
       <option name="_new_targetType" value="&quot;PYTHON&quot;" />
       <method v="2" />
     </configuration>
-    <configuration name="Python tests for test_datamodel_finance_pg.Test.test_get_salaries" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
-      <module name="sqlalchemyProject" />
+    <configuration default="true" type="tests" factoryName="Autodetect">
+      <module name="FinanceGUI" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
       <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests" />
-      <option name="IS_MODULE_SDK" value="true" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;test_datamodel_finance_pg.Test.test_get_salaries&quot;" />
-      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
+      <option name="_new_target" value="&quot;&quot;" />
+      <option name="_new_targetType" value="&quot;PATH&quot;" />
+      <method v="2" />
+    </configuration>
+    <configuration default="true" type="tests" factoryName="Doctests">
+      <module name="FinanceGUI" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="" />
+      <option name="CLASS_NAME" value="" />
+      <option name="METHOD_NAME" value="" />
+      <option name="FOLDER_NAME" value="" />
+      <option name="TEST_TYPE" value="TEST_SCRIPT" />
+      <option name="PATTERN" value="" />
+      <option name="USE_PATTERN" value="false" />
       <method v="2" />
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Python tests.Python tests for test_datamodel_finance_pg.TestFunctions" />
+        <item itemvalue="Python tests.Python tests for test_datamodel_finance_pg.TestSalary" />
         <item itemvalue="Python tests.Python tests for test_datamodel_finance_pg.Test" />
         <item itemvalue="Python tests.Python tests for test_datamodel_finance_pg.TestProvisions" />
         <item itemvalue="Python tests.Python tests for test_datamodel_finance_pg.TestSalary.test_get_salary_transaction" />
-        <item itemvalue="Python tests.Python tests for test_datamodel_finance_pg.TestSalary" />
-        <item itemvalue="Python tests.Python tests for test_datamodel_finance_pg.Test.test_get_salaries" />
       </list>
     </recent_temporary>
   </component>
@@ -204,17 +286,27 @@
       <option name="presentableId" value="Default" />
       <updated>1727531271613</updated>
     </task>
+    <task id="LOCAL-00001" summary="Added the full GUI layer">
+      <option name="closed" value="true" />
+      <created>1739111880928</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1739111880928</updated>
+    </task>
+    <task id="LOCAL-00002" summary="Added the full GUI layer">
+      <option name="closed" value="true" />
+      <created>1739111886594</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1739111886594</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
-  <component name="XDebuggerManager">
-    <breakpoint-manager>
-      <breakpoints>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/tests/test_datamodel_finance_pg.py</url>
-          <line>9</line>
-          <option name="timeStamp" value="1" />
-        </line-breakpoint>
-      </breakpoints>
-    </breakpoint-manager>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Added the full GUI layer" />
+    <option name="LAST_COMMIT_MESSAGE" value="Added the full GUI layer" />
   </component>
 </project>
