@@ -98,7 +98,7 @@ def link_transaction(editable: Mouvement) -> Mouvement:
     Also, it is possible to set the reimbursement ratio"""
     # Data
     df = fetch_events(editable.categorie)
-    headers =  ('Date', 'Evénement', 'Dépense', 'Recette')
+    headers = ('Date', 'Evénement', 'Dépense', 'Recette')
 
     # parameters
     is_expense = editable.depense is not None and editable.depense > 0
@@ -154,7 +154,15 @@ def link_transaction(editable: Mouvement) -> Mouvement:
                 window['-EXPECTED-'].update(str(new_expected))
             except ValueError:
                 sg.popup_error("❌ Veuillez entrer des montants valides !", font=("Arial", 12), text_color="red")
-
+        elif isinstance(event, tuple) and event[0] == "-EVENTS-" and event[1] == "+CLICKED+":
+            row, col = event[2]  # Récupère la ligne et la colonne cliquées
+            if row is None:
+                status_message = f"Pas d'index sélectionné"
+            elif row >= 0:
+                date = df.iloc[row, 0]
+                evenement = df.iloc[row, 1]
+                window['-DATE-'].update(date)
+                window['-LABEL-'].update(evenement)
         elif event == '-VALIDER-':
             # retrieve all the values, and try to save
             try:
@@ -448,9 +456,11 @@ def main():
             update_values = True
         elif event == '-REIMBURSABLE-':
             reimbursable_filter = True
+            affectable_filter = False
             update_values = True
         elif event == '-AFFECTABLE-':
             affectable_filter = True
+            reimbursable_filter = False
             update_values = True
         elif event == '-APPLY-FILTER-':
             desc_filter = values["-FILTER-"]
