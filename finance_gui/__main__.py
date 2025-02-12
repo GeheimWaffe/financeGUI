@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 import engines
 import pandas as pd
 
+
+# Imports from data model
 from datamodel_finance_pg import get_remaining_provisioned_expenses, get_soldes, close_provision, \
     deactivate_transaction, get_categories, get_comptes, Mouvement, \
     import_transaction, MapCategorie, import_keyword, get_transaction, get_events
