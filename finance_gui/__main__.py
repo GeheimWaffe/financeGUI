@@ -1,5 +1,5 @@
 import datetime
-
+from dateutil.relativedelta import relativedelta
 import PySimpleGUI as sg
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -7,11 +7,11 @@ from sqlalchemy.orm import Session
 import engines
 import pandas as pd
 
-
 # Imports from data model
+# New
 from datamodel_finance_pg import get_remaining_provisioned_expenses, get_soldes, close_provision, \
     deactivate_transaction, get_categories, get_comptes, Mouvement, \
-    import_transaction, MapCategorie, import_keyword, get_transaction, get_events
+    import_transaction, MapCategorie, import_keyword, get_transaction, get_events, get_provisions_for_month
 from finance_orm_cli.masterdata import split_mouvement
 
 # Connexion à la base de données PostgreSQL
@@ -22,7 +22,8 @@ offset_size = 20
 
 
 def fetch_mouvements(offset=0, search_filter="", sort_column=None, sort_order="asc", category_filter: str = None,
-                     compte_filter: str = None, reimbursable: bool = False, affectable: bool = False):
+                     compte_filter: str = None, month_filter: datetime.date = None, reimbursable: bool = False,
+                     affectable: bool = False, provisions: bool = False):
     """Récupère 20 lignes de la table Mouvements avec option de tri et filtre."""
     query = 'SELECT c.index, c."Description", c."Label utilisateur", c."Catégorie",  c."Date", c."Mois", c."Dépense",' \
             'c."Recette", c."Provision à payer", c."Provision à récupérer" FROM public.comptes c' \
@@ -37,9 +38,17 @@ def fetch_mouvements(offset=0, search_filter="", sort_column=None, sort_order="a
         query += f' AND c."Dépense" > 0 AND (c."Taux remboursement" IS NULL OR c."Label utilisateur" IS NULL or c."Date remboursement" IS NULL)'
     if affectable:
         query += f' AND c."Recette" > 0 AND (c."Label utilisateur" IS NULL or c."Date remboursement" IS NULL)'
+    if provisions:
+        query += f' AND NOT (c."Provision à payer" is NULL and c."Provision à récupérer" is NULL)'
+    if month_filter:
+        month_string = month_filter.strftime('%Y-%m-%d')
+        query += f' AND c."Mois" = \'{month_string}\''
     if sort_column:
         query += f" ORDER BY {sort_column} {sort_order}"
     query += f" LIMIT {offset_size} OFFSET {offset}"
+
+    print(f"statement : {query}")
+
     with engine.connect() as connection:
         df = pd.read_sql(query, connection)
 
@@ -51,6 +60,12 @@ def fetch_mouvements(offset=0, search_filter="", sort_column=None, sort_order="a
     return df
 
 
+def fetch_provisions(category_filter: str, month_filter: datetime.date) -> pd.DataFrame:
+    df = fetch_mouvements(offset=0, category_filter=category_filter, month_filter=month_filter, provisions=True)
+    df = df[["index", "Description", "Provision"]]
+    return df
+
+
 def fetch_events(category_filter: str) -> pd.DataFrame:
     """ Récupère les 50 premières lignes des événements"""
     with Session(engine) as session:
@@ -58,6 +73,16 @@ def fetch_events(category_filter: str) -> pd.DataFrame:
 
     df = pd.DataFrame(data=data, columns=headers)
     df[["Dépense", "Recette"]] = df[["Dépense", "Recette"]].map(lambda x: f"{x:.2f} €" if x else "")
+    return df
+
+
+def fetch_bilans(month: datetime.date) -> pd.DataFrame:
+    """ Récupère les provisions pour un mois"""
+    headers, data = get_provisions_for_month(engine, month)
+
+    df = pd.DataFrame(data=data, columns=headers)
+    numcols = ['Dépense Courante', 'Recette Courante', 'RCP', 'DCP', 'Recette Reste', 'Dépense Reste']
+    df[numcols] = df[numcols].astype(float).round(2)
     return df
 
 
@@ -95,6 +120,10 @@ def common_cancel_button() -> sg.Button:
     return sg.Button("❌ Annuler", size=(10, 1), button_color=("white", "red"), key="-ANNULER-")
 
 
+def common_delete_button() -> sg.Button:
+    return sg.Button("❌ Supprimer", size=(10, 1), button_color=("white", "red"), key="-DELETE-")
+
+
 def link_transaction(editable: Mouvement) -> Mouvement:
     """ Function that enables to link a transaction to a common event and label
     Also, it is possible to set the reimbursement ratio"""
@@ -126,7 +155,7 @@ def link_transaction(editable: Mouvement) -> Mouvement:
     layout += [
         [sg.Text("Date d'événement :", size=(15, 1)),
          sg.Input(key="-DATE-", size=(12, 1), default_text=dt_remb),
-         sg.CalendarButton("📅", target="-DATE-", format="%Y-%m-%d")],
+         sg.CalendarButton("Calendar", target="-DATE-", format="%Y-%m-%d")],
         [sg.Text("Libellé : ", size=(15, 1)),
          sg.Input(key="-LABEL-", size=(50, 1), default_text=label)],
         [sg.HorizontalSeparator()],
@@ -188,15 +217,20 @@ def show_transaction_editor(editable: Mouvement) -> Mouvement:
     # retrieve the comptes
     if editable.depense:
         depense_text = str(round(editable.depense, 2))
+    else:
+        depense_text = ''
     if editable.recette:
         recette_text = str(round(editable.recette, 2))
+    else:
+        recette_text = ''
+
     layout = [
         [sg.Text("Catégorie :", size=(15, 1)), common_category_combo(editable.categorie)],
         [sg.Text("Label utilisateur :", size=(15, 1)),
          sg.Input(key="-LABEL-", size=(25, 1), default_text=editable.label_utilisateur)],
         [sg.Text("Mois :", size=(15, 1)),
          sg.Input(key="-MOIS-", size=(12, 1), default_text=editable.mois.strftime("%Y-%m-%d")),
-         sg.CalendarButton("📅", target="-MOIS-", format="%Y-%m-%d")],
+         sg.CalendarButton("Calendar", target="-MOIS-", format="%Y-%m-%d")],
         [sg.Text("Montant Dépense (€) :", size=(15, 1)),
          sg.InputText(key="-DEPENSE-", size=(10, 1), default_text=depense_text)],
         [sg.Text("Montant Recette (€) :", size=(15, 1)),
@@ -234,6 +268,84 @@ def show_transaction_editor(editable: Mouvement) -> Mouvement:
             except ValueError:
                 sg.popup_error("❌ Veuillez entrer des montants valides !", font=("Arial", 12), text_color="red")
 
+
+def show_provision_editor(categorie: str, mois: datetime.date, economy_mode: bool = False):
+    # Retrieve the data
+    df = fetch_provisions(category_filter=categorie, month_filter=mois)
+
+    # Prepare the layout
+    depense_text = ''
+    recette_text = ''
+
+    layout = [
+        [sg.Text("Description :", size=(25, 1)),
+         sg.Input(key="-DESCRIPTION-", size=(25, 1))],
+        [sg.Text("Provision Dépense (€) :", size=(15, 1)),
+         sg.InputText(key="-DEPENSE-", size=(10, 1), default_text="0.00"),
+         sg.Text("Provision Recette (€) :", size=(15, 1)),
+         sg.InputText(key="-RECETTE-", size=(10, 1), default_text="0.00")],
+        [sg.HorizontalSeparator()],  # Ligne de séparation
+
+        [common_valider_button(), common_cancel_button()],
+        [sg.HorizontalSeparator()],
+        [sg.Table(values=df.values.tolist(), headings=list(df.columns), key="-PROVISIONS-", enable_events=True,
+                  justification="center", auto_size_columns=True,
+                  num_rows=20, enable_click_events=True)],
+        [common_delete_button()]
+    ]
+
+    # Build the window
+    window = sg.Window("Editez une provision", layout, modal=True, element_justification="left", font=("Arial", 12))
+
+    while True:
+        event, values = window.read()
+        update_values = False
+
+        if event in (sg.WIN_CLOSED, "-ANNULER-"):
+            window.close()
+            return None  # Annulation
+        elif isinstance(event, tuple) and event[0] == "-PROVISIONS-" and event[1] == "+CLICKED+":
+            row, col = event[2]  # Récupère la ligne et la colonne cliquées
+            if row >= 0:
+                index = int(df.iloc[row, 0])
+            else:
+                index = -1
+
+        elif event == "-DELETE-":
+            # identify the deleted provision
+            if index >= 0:
+                deactivate_transaction(engine, index)
+                update_values = True
+        elif event == "-VALIDER-":
+            try:
+                # Vérification des nombres
+                depense = float(values["-DEPENSE-"]) if values["-DEPENSE-"] else 0.0
+                recette = float(values["-RECETTE-"]) if values["-RECETTE-"] else 0.0
+                if values["-DESCRIPTION-"] is None or values["-DESCRIPTION-"] == '':
+                    raise ValueError("You need to enter a proper description")
+                description = values["-DESCRIPTION-"]
+
+                # create new item
+                item = Mouvement()
+                item.date = datetime.date.today()
+                item.mois = mois
+                item.categorie = categorie
+                item.description = values["-DESCRIPTION-"]
+                item.provision_payer = depense
+                item.provision_recuperer = recette
+                item.economie = 'true' if economy_mode else 'false'
+
+                # save item
+                import_transaction(engine, item)
+                update_values = True
+            except ValueError:
+                sg.popup_error(f"Error {ValueError}. ❌ Veuillez entrer des montants valides !", font=("Arial", 12),
+                               text_color="red")
+
+        # Managing updates
+        if update_values:
+            df = fetch_provisions(category_filter=categorie, month_filter=mois)
+            window['-PROVISIONS-'].update(df.values.tolist())
 
 def show_keyword_import(description: str, category: str) -> MapCategorie:
     """ Proposes to insert a new keyword corresponding to the category """
@@ -278,7 +390,7 @@ def show_new_transaction_editor():
 
         [sg.Text("Date :", size=(15, 1)),
          sg.Input(key="-DATE-", size=(12, 1)),
-         sg.CalendarButton("📅", target="-DATE-", format="%Y-%m-%d")],
+         sg.CalendarButton("Calendar", target="-DATE-", format="%Y-%m-%d")],
 
         [sg.Text("Compte :", size=(15, 1)), common_compte_combo()],
 
@@ -286,7 +398,7 @@ def show_new_transaction_editor():
 
         [sg.Text("Mois :", size=(15, 1)),
          sg.Input(key="-MOIS-", size=(12, 1)),
-         sg.CalendarButton("📅", target="-MOIS-", format="%Y-%m-%d")],
+         sg.CalendarButton("Calendar", target="-MOIS-", format="%Y-%m-%d")],
 
         [sg.Text("Montant Dépense (€) :", size=(15, 1)), sg.InputText(key="-DEPENSE-", size=(10, 1))],
 
@@ -329,7 +441,78 @@ def show_new_transaction_editor():
                 sg.popup_error("❌ Veuillez entrer des montants valides !", font=("Arial", 12), text_color="red")
 
 
-def show_period_editor():
+def manage_monthly_provisions():
+    """ interface for managing a monthly provision"""
+    ##########
+    # STANDARD
+    ##########
+    update_values: bool = False
+    status_message: str = ''
+
+    # Variables d'état
+    current_month: datetime.date = datetime.date.today() - datetime.timedelta(days=datetime.date.today().day - 1)
+    df = fetch_bilans(current_month)
+
+    # Layout
+    layout = [
+        [sg.Text("Mois :", size=(15, 1)),
+         sg.Input(key="-DATE-", size=(12, 1), default_text=current_month.strftime('%Y-%m-%d'), enable_events=True),
+         sg.Button("<<", key="-PREVIOUS-"), sg.Button(">>", key="-NEXT-")
+         ],
+
+        [sg.Table(values=df.values.tolist(), headings=list(df.columns), key="-PROVISIONS-", enable_events=True,
+                  justification="center", auto_size_columns=True,
+                  num_rows=30, enable_click_events=True)],
+        [sg.Button("Manage", size=(15, 1))],
+
+        [sg.HorizontalSeparator()],
+        [common_valider_button(), common_cancel_button()]
+    ]
+
+    # Display
+    window = sg.Window("Provisions", layout=layout, modal=True)
+
+    category = None
+
+    # Events
+    while True:
+        event, values = window.read()
+        update_values = False
+
+        if event in (sg.WIN_CLOSED, "-ANNULER-"):
+            break
+        elif event == '-DATE-':
+            # change of dates. Refresh
+            current_month = datetime.date.fromisoformat(values['-DATE-'])
+            update_values = True
+        elif event == "-PREVIOUS-":
+            current_month = current_month - relativedelta(months=1)
+            update_values = True
+        elif event == "-NEXT-":
+            current_month += relativedelta(months=1)
+            update_values = True
+        elif isinstance(event, tuple) and event[0] == "-PROVISIONS-" and event[1] == "+CLICKED+":
+            row, col = event[2]  # Récupère la ligne et la colonne cliquées
+            if row is None:
+                status_message = f"Pas d'index sélectionné"
+                category = None
+            elif row >= 0:
+                category = df.iloc[row, 1]
+                status_message = f"Catégorie sélectionnée : {df.iloc[row, 1]}"
+        elif event == "Manage":  # Launch new editor
+            show_provision_editor(categorie=category, mois=current_month, economy_mode=False)
+            update_values = True
+        # Conditional update
+        if update_values:
+            df = fetch_bilans(current_month)
+            window["-DATE-"].update(current_month.strftime("%Y-%m-%d"))
+            window['-PROVISIONS-'].update(df.values.tolist())
+
+    # End of the function
+    window.close()
+
+
+def manage_remaining_provisions():
     # Définition des variables d'état
     current_year = datetime.datetime.now().year
     # Récupération des provisions non fermées
@@ -382,7 +565,6 @@ def main():
     ##########
     # STANDARD
     ##########
-    update_values: bool = False
     status_message: str = ''
 
     # Définition des variables d'état
@@ -401,7 +583,8 @@ def main():
     # Définition de la structure de la fenêtre
     layout = [
         [sg.Button("Provisions", size=(15, 1), button_color=("green", "black")),
-         sg.Text("🔍 Filter By :"),
+         sg.Button("Monthly Provisions", size=(15, 1), button_color=("green", "black"))],
+        [sg.Text("Filter By :"),
          common_category_combo(),
          common_compte_combo(),
          sg.Button("Reimbursable Expenses", size=(20, 1), key="-REIMBURSABLE-"),
@@ -441,8 +624,9 @@ def main():
         if event in (sg.WIN_CLOSED, "Quitter"):
             break
         elif event == "Provisions":
-            show_period_editor()
-            print("Period Editor closed")
+            manage_remaining_provisions()
+        elif event == "Monthly Provisions":
+            manage_monthly_provisions()
         elif event == "-CLEAR-":
             category_filter = None
             compte_filter = None

@@ -171,6 +171,38 @@ def get_events(s: Session, category: str = None):
     return headers, result
 
 
+def get_provisions_for_month(e: Engine, month: date):
+    """ Returns all the aggregated provisions for a specific month"""
+    metadata_obj = MetaData()
+    provisions = Table('view_bilans_agregation',
+                       metadata_obj,
+                       Column('Catégorie Groupe', String),
+                       Column('Catégorie', String),
+                       Column('Mois', Date),
+                       Column('Recette Courante', Numeric),
+                       Column('Recette Courante Provisionnée', Numeric),
+                       Column('Recette Courante Provisionnée restante', Numeric),
+                       Column('Dépense Courante', Numeric),
+                       Column('Dépense Courante Provisionnée', Numeric),
+                       Column('Dépense Courante Provisionnée non épuisée', Numeric),
+
+                       schema='dbview_schema')
+    with Session(e) as session:
+        result = session.execute(
+            select(provisions.c['Catégorie Groupe'], provisions.c['Catégorie'], provisions.c['Recette Courante'],
+                   provisions.c['Recette Courante Provisionnée'],
+                   provisions.c['Recette Courante Provisionnée restante'],
+                   provisions.c['Dépense Courante'], provisions.c['Dépense Courante Provisionnée'],
+                   provisions.c['Dépense Courante Provisionnée non épuisée']).where(
+                provisions.c['Mois'] == month).order_by(
+                provisions.c['Catégorie Groupe'], provisions.c['Catégorie'])).all()
+
+    headers = ('Catégorie Groupe', 'Catégorie', 'Recette Courante', 'RCP', 'Recette Reste', 'Dépense Courante', 'DCP',
+               'Dépense Reste')
+
+    return headers, result
+
+
 def get_soldes(s: Session, type_compte: str):
     """ Returns the current accounts"""
     metadata_obj = MetaData()
