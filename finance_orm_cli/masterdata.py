@@ -1,7 +1,8 @@
 import datetime as dt
 from engines import get_pgfin_engine, get_sqlite_engine
 from datamodel_finance_pg import Compte, Categorie, Mouvement, Base, MapOrganisme, Job, Salaire, get_salaries, \
-    get_max_number, get_salary_transaction, get_remaining_provisioned_expenses, close_provision
+    get_max_number, get_salary_transaction, get_remaining_provisioned_expenses, close_provision, split_mouvement, \
+    generate_provision
 from sqlalchemy import select
 
 # create the engine
@@ -163,113 +164,6 @@ def mouvements():
                 generate_provision(cat, year, description, dep, rec)
 
     print('Closing the session and exiting. Thank you !')
-
-
-def split_mouvement(index: int, mode: str = 'year', periods: int = 12, rounding: int = 2):
-    """ The function splits a row in the database
-    It has two modes :
-    - year : spreads over a calendar year
-    - custom : spreads over a custom number of periods (by default : 12)
-    """
-    with Session(e) as session:
-        mvt = session.get(Mouvement, ident=index)
-        if not mvt is None:
-            # initier les variables
-            rec = mvt.recette
-            dep = mvt.depense
-
-            # Logique spécifique au split annuel
-            if mode == 'year':
-                mois = [dt.date(mvt.mois.year, i + 1, 1) for i in range(periods)]
-            else:
-                mois = [mvt.mois] * periods
-
-            if rec is None:
-                split_rec = None
-                rest_rec = None
-            else:
-                split_rec = round(rec / periods, rounding)
-                rest_rec = rec - (periods - 1) * split_rec
-                mvt.recette_initiale = rec
-                mvt.recette = 0
-
-            if dep is None:
-                split_dep = None
-                rest_dep = None
-            else:
-                split_dep = round(dep / periods, rounding)
-                rest_dep = dep - (periods - 1) * split_dep
-                mvt.depense_initiale = dep
-                mvt.depense = 0
-
-            deps = [split_dep] * 11 + [rest_dep]
-            recs = [split_rec] * 11 + [rest_rec]
-
-            # Create a new job
-            job = Job(job_key=Job.type_split, job_timestamp=dt.datetime.now())
-
-            # create the sub-transactions
-            for i in range(periods):
-                session.add(
-                    Mouvement(date=mvt.date,
-                              description=mvt.description,
-                              recette=recs[i],
-                              depense=deps[i],
-                              compte=mvt.compte,
-                              categorie=mvt.categorie,
-                              economie=mvt.economie,
-                              regle=mvt.regle,
-                              mois=mois[i],
-                              date_insertion=mvt.date_insertion,
-                              provision_payer=mvt.provision_payer,
-                              provision_recuperer=mvt.provision_recuperer,
-                              date_remboursement=mvt.date_remboursement,
-                              organisme=mvt.organisme,
-                              date_out_of_bound=mvt.date_out_of_bound,
-                              taux_remboursement=mvt.taux_remboursement,
-                              fait_marquant=mvt.fait_marquant,
-                              no=mvt.no,
-                              no_de_reference=mvt.no_de_reference,
-                              index_parent=mvt.index_parent,
-                              depense_initiale=mvt.depense_initiale,
-                              recette_initiale=mvt.recette_initiale,
-                              label_utilisateur=mvt.label_utilisateur,
-                              job=job
-                              )
-                )
-
-            # Update the original transaction
-            session.add(mvt)
-
-            # end
-            session.flush()
-            session.commit()
-
-
-def generate_provision(category: str, year: int, description: str, depense: float, recette: float):
-    """ generate a set of provision for a given year"""
-    print(f'Generating a set of provisions for category {category} in year {year} with description {description}')
-
-    with Session(e) as session:
-        # create a job
-        job = Job(job_key=Job.type_provision, job_timestamp=dt.datetime.now())
-        # generate a set of provisions
-        for i in range(12):
-            mvt = Mouvement(date=dt.date(year, 1, 1),
-                            description=description,
-                            categorie=category,
-                            mois=dt.date(year, i + 1, 1),
-                            date_insertion=dt.date.today(),
-                            provision_payer=depense,
-                            provision_recuperer=recette,
-                            no=0,
-                            job=job
-                            )
-            session.add(mvt)
-            print(f'Transaction generated : {mvt}')
-
-        session.flush()
-        session.commit()
 
 
 def shutdown_category():

@@ -1,10 +1,11 @@
 from unittest import TestCase
 
 import pandas as pd
+from sqlalchemy import select, Column
 from sqlalchemy.orm import Session
 
 from datamodel_finance_pg import get_salaries, get_max_number, get_salary_transaction, \
-    get_remaining_provisioned_expenses, get_events
+    get_remaining_provisioned_expenses, get_events, Mouvement
 from engines import get_pgfin_engine
 from datetime import date
 
@@ -61,3 +62,13 @@ class TestFunctions(TestCase):
             df = pd.DataFrame(data=data, columns=headers)
             print(df)
 
+class TestORM(TestCase):
+    def test_select_column(self):
+        stmt = select(Mouvement)
+
+        c: Column = Mouvement.__table__.c['Numéro de référence']
+        print(c.name)
+        print(c.key)
+
+#        for c in Mouvement.__table__.columns:
+ #           print(c)
