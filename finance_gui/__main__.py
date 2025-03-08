@@ -4,19 +4,20 @@ import re
 from PySimpleGUI import RELIEF_GROOVE, RELIEF_SUNKEN
 from dateutil.relativedelta import relativedelta
 import PySimpleGUI as sg
+from sqlalchemy import select, and_, or_, not_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import engines
 import pandas as pd
 
-
 # Imports from data model
 # New
 from datamodel_finance_pg import get_remaining_provisioned_expenses, get_soldes, close_provision, \
     deactivate_transaction, get_categories, get_comptes, Mouvement, \
     import_transaction, MapCategorie, import_keyword, get_transaction, get_events, get_provisions_for_month, \
-    get_salaries, get_type_comptes, get_matching_keywords, split_mouvement, simple_split, apply_mass_update
+    get_salaries, get_type_comptes, get_matching_keywords, split_mouvement, simple_split, apply_mass_update, \
+    create_salaries
 
 # Connexion à la base de données PostgreSQL
 engine = engines.get_pgfin_engine()
@@ -29,40 +30,48 @@ declarants = ['Vincent', 'Aurélie']
 
 
 def fetch_mouvements(offset_size, offset=0, search_filter="", sort_column=None, sort_order="asc",
-                     category_filter: str = None,
-                     compte_filter: str = None, month_filter: datetime.date = None, reimbursable: bool = False,
-                     affectable: bool = False, provisions: bool = False, economy_mode: bool = False):
-    """Récupère 20 lignes de la table Mouvements avec option de tri et filtre."""
-    query = 'SELECT c.index, c."Description", c."Label utilisateur", c."Catégorie",  c."Date", c."Mois", c."Dépense",' \
-            'c."Recette", c."Provision à payer", c."Provision à récupérer", c."Numéro de référence" FROM public.comptes c' \
-            ' WHERE c."Date Out of Bound" is FALSE'
-    query += f" AND c.\"Economie\" = '{'true' if economy_mode else 'false'}'"
+                               category_filter: str = None,
+                               compte_filter: str = None, month_filter: datetime.date = None,
+                               reimbursable: bool = False,
+                               affectable: bool = False, provisions: bool = False,
+                               economy_mode: bool = False) -> pd.DataFrame:
+    """ Utilisation de l'ORM """
+    stmt = select(Mouvement.index, Mouvement.description, Mouvement.label_utilisateur, Mouvement.categorie,
+                  Mouvement.date, Mouvement.mois, Mouvement.depense, Mouvement.recette, Mouvement.provision_payer,
+                  Mouvement.provision_recuperer, Mouvement.no_de_reference).where(
+        Mouvement.date_out_of_bound == False)
 
     if search_filter:
-        query += f" AND c.\"Description\"::TEXT ILIKE '%%{search_filter}%%'"
-    if not category_filter is None:
-        query += f' AND c."Catégorie" = \'{category_filter}\''
-    if not compte_filter is None:
-        query += f' AND c."Compte" = \'{compte_filter}\''
+        stmt = stmt.where(Mouvement.description.ilike(f"%%{search_filter}%%"))
+    if category_filter:
+        stmt = stmt.where(Mouvement.categorie == category_filter)
+    if compte_filter:
+        stmt = stmt.where(Mouvement.compte == compte_filter)
+    if economy_mode:
+        stmt = stmt.where(Mouvement.economie == 'true')
     if reimbursable:
-        query += f' AND c."Dépense" > 0 AND (c."Taux remboursement" IS NULL OR c."Label utilisateur" IS NULL or c."Date remboursement" IS NULL)'
+        stmt = stmt.where(and_(Mouvement.depense > 0,
+                               or_(Mouvement.taux_remboursement == None, Mouvement.label_utilisateur == None,
+                                   Mouvement.date_remboursement == None)))
     if affectable:
-        query += f' AND c."Recette" > 0 AND (c."Label utilisateur" IS NULL or c."Date remboursement" IS NULL)'
+        stmt = stmt.where(
+            and_(Mouvement.recette > 0, or_(Mouvement.label_utilisateur == None, Mouvement.date_remboursement == None)))
     if provisions:
-        query += f' AND NOT (c."Provision à payer" is NULL and c."Provision à récupérer" is NULL)'
+        stmt = stmt.where(not_(and_(Mouvement.provision_payer == None, Mouvement.provision_recuperer == None)))
     if month_filter:
-        month_string = month_filter.strftime('%Y-%m-%d')
-        query += f' AND c."Mois" = \'{month_string}\''
+        stmt = stmt.where(Mouvement.mois == month_filter)
+
     if sort_column:
-        query += f" ORDER BY {sort_column} {sort_order}"
-    query += f" LIMIT {offset_size} OFFSET {offset}"
+        stmt = stmt.order_by(Mouvement.__table__.c[sort_column].desc())
 
-    print(f"statement : {query}")
+    # Limiting and offsetting
+    stmt = stmt.limit(offset_size).offset(offset)
 
-    with engine.connect() as connection:
-        df = pd.read_sql(query, connection)
+    # returing the result
+    with engine.connect() as conn:
+        df = pd.read_sql(stmt, conn)
 
-    # Calculations
+    # Massaging the result
     df.fillna(value=0, inplace=True)
     df['Solde'] = df['Recette'] - df['Dépense']
     df['Provision'] = df['Provision à récupérer'] - df['Provision à payer']
@@ -117,6 +126,13 @@ def fetch_salaries() -> pd.DataFrame:
 def fetch_compte_types() -> []:
     with Session(engine) as session:
         result = get_type_comptes(session)
+
+    return result
+
+
+def fetch_keywords():
+    with Session(engine) as session:
+        result = session.scalars(select(MapCategorie).order_by(MapCategorie.categorie)).all()
 
     return result
 
@@ -600,8 +616,10 @@ def show_new_transaction_editor():
                 sg.popup_error("❌ Veuillez entrer des montants valides !", font=("Calibri", 12), text_color="red")
 
 
-def manage_salaries():
-    """ interface for managing the salaries"""
+def manage_salaries() -> bool:
+    """ interface for managing the salaries
+
+    :returns: boolean to indicate if an update did happen"""
     ##########
     # STANDARD
     ##########
@@ -615,9 +633,10 @@ def manage_salaries():
     layout = [
         [sg.Table(values=df.values.tolist(), headings=list(df.columns), key='-SALARIES-', justification="center",
                   auto_size_columns=True,
-                  num_rows=12)],
+                  num_rows=12, enable_events=True, enable_click_events=True)],
         [sg.HorizontalSeparator()],
-        [sg.Button("Import Selected", size=(15, 1), button_color=("white", "green"))],
+        [sg.Button("Simulate", size=(15, 1)),
+         sg.Button("Import Selected", size=(15, 1), button_color=("white", "green"))],
         [sg.HorizontalSeparator()],
         [common_status_bar()]
     ]
@@ -625,6 +644,7 @@ def manage_salaries():
     window = sg.Window("Salaires", layout=layout, modal=True)
 
     # display
+    to_update = False
     while True:
         event, values = window.read()
 
@@ -636,13 +656,23 @@ def manage_salaries():
                 selected_month = df.iloc[row, 0]
                 status_message = f"Month selected : {selected_month}"
         elif event == "Import Selected":
-            pass
+            if row >= 0:
+                selected_month = df.iloc[row, 0]
+                create_salaries(engine, selected_month, 'Vincent', False)
+                status_message = 'Import done'
+                to_update = True
+        elif event == "Simulate":
+            if row >= 0:
+                selected_month = df.iloc[row, 0]
+                create_salaries(engine, selected_month, 'Vincent', True)
+                status_message = 'Simulation done'
 
         # updates
         window["-STATUS-BAR-"].update(status_message)
 
     # end of the function
     window.close()
+    return to_update
 
 
 def manage_monthly_provisions():
@@ -869,6 +899,40 @@ def get_custom_split(no_periods: int, initial_amount: float, initial_month: date
     return result_values, result_months
 
 
+def manage_keywords(df: pd.DataFrame, offset_size: int):
+    """ GUI for checking whether the keywords are properly matching
+    The GUI contains following components :
+    - a calculation of the rate of transactions matching with a pattern
+    - a table with the unmatched transactions
+    """
+    # retrieve the keywords
+    keywords = fetch_keywords()
+    kw_list = [kw.keyword for kw in keywords]
+
+    df['Matched ?'] = df.apply(lambda x: any([True if kw in x.Description else False for kw in kw_list]), axis=1)
+
+    percentage = len(df.loc[df['Matched ?']]) / len(df)
+    layout = [
+        [sg.Text(f"{len(keywords)} keywords retrieved")],
+        [sg.Text(f"{percentage * 100} % of the transactions were matched")],
+        [sg.Table(values=df.loc[~df['Matched ?']].values.tolist(), headings=list(df.columns), key="-MVTS-",
+                  enable_events=True,
+                  justification="center", auto_size_columns=True,
+                  num_rows=offset_size, enable_click_events=True)]
+    ]
+
+    # display
+    window = sg.Window("Checking efficiency of pattern recognition", layout, modal=True)
+
+    # Loop
+    while True:
+        event, values = window.read()
+
+        if event == sg.WIN_CLOSED:
+            window.close()
+            break
+
+
 def main():
     ##########
     # STANDARD
@@ -884,6 +948,8 @@ def main():
     desc_filter = None
     reimbursable_filter = False
     affectable_filter = False
+    economy_mode = False
+    sort_column='index'
     index: int = -1
     row: int = -1
     description = ''
@@ -901,16 +967,19 @@ def main():
     layout = [
         [sg.Button("Provisions", size=(15, 1), button_color=("white", "blue")),
          sg.Button("Monthly Provisions", size=(15, 1), button_color=("white", "blue")),
-         sg.Button("Salaries", size=(15, 1), button_color=("white", "blue"))],
+         sg.Button("Salaries", size=(15, 1), button_color=("white", "blue")),
+         sg.Button("Pattern Check", size=(15, 1), button_color=("white", "blue"))],
         [sg.Text("Filter By :"),
          common_category_combo(),
          common_compte_combo(),
          sg.Button("Reimbursable Expenses", size=(20, 1), key="-REIMBURSABLE-"),
          sg.Button("Affectable Payments", size=(20, 1), key='-AFFECTABLE-'),
+         sg.Button("All Expenses", size=(15, 1), key='-ECONOMY-', button_color=get_toggle_style(economy_mode)),
          sg.InputText(key='-FILTER-', size=(20, 1)),
          sg.Button("%", key='-APPLY-FILTER-'),
          sg.Button("✖ Clear", key="-CLEAR-")
          ],
+        [sg.Button('⇅ Date', key='-SORT-DATE-', size=(6, 1)), sg.Button('⇅ index', key='-SORT-INDEX-', size=(7, 1))],
         [sg.Table(values=df.values.tolist(), headings=list(df.columns), key="-MVTS-", enable_events=True,
                   justification="center", auto_size_columns=True,
                   num_rows=offset_size, enable_click_events=True),
@@ -953,7 +1022,9 @@ def main():
             manage_monthly_provisions()
             update_values = True
         elif event == "Salaries":
-            manage_salaries()
+            update_values = manage_salaries()
+        elif event == "Pattern Check":
+            manage_keywords(df, offset_size)
         elif event == "-CLEAR-":
             category_filter = None
             compte_filter = None
@@ -978,8 +1049,17 @@ def main():
             affectable_filter = True
             reimbursable_filter = False
             update_values = True
+        elif event == '-ECONOMY-':
+            economy_mode = not economy_mode
+            update_values = True
         elif event == '-APPLY-FILTER-':
             desc_filter = values["-FILTER-"]
+            update_values = True
+        elif event == '-SORT-DATE-':
+            sort_column = 'Date'
+            update_values = True
+        elif event == '-SORT-INDEX-':
+            sort_column = 'index'
             update_values = True
         elif event == "Previous":
             # Revenir aux lignes précédentes
@@ -1082,12 +1162,13 @@ def main():
             update_values = True
         if update_values:
             df = fetch_mouvements(offset_size=offset_size, offset=offset, search_filter=desc_filter,
-                                  sort_column="index", sort_order="desc", category_filter=category_filter,
-                                  compte_filter=compte_filter, reimbursable=reimbursable_filter,
-                                  affectable=affectable_filter)
+                                            sort_column=sort_column, sort_order="desc", category_filter=category_filter,
+                                            compte_filter=compte_filter, reimbursable=reimbursable_filter,
+                                            affectable=affectable_filter, economy_mode=economy_mode)
             window["-MVTS-"].update(values=df.values.tolist())
             soldes = fetch_soldes(selected_type)
             window["-SOLDES-"].update(values=soldes)
+            window['-ECONOMY-'].update(text='Economies' if economy_mode else 'All Expenses', button_color=get_toggle_style(economy_mode))
         # Updating the status bar
         window["-STATUS-BAR-"].update(status_message)
     # Fermeture de la fenêtre

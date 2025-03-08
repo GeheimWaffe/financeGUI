@@ -7,7 +7,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, Session
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.types import String, Integer, Date, Numeric
 
-
 class Base(DeclarativeBase):
     pass
 
@@ -446,8 +445,8 @@ def simple_split(e: Engine, index: int, values: list, months: list):
 
     :param e: the engine
     :param index: index of the transaction to split
-    :param values: list of splitted values
-    :param months: list of splitted months"""
+    :param values: list of split values
+    :param months: list of split months"""
 
     with Session(e) as session:
         mvt = session.get(Mouvement, ident=index)
@@ -602,3 +601,119 @@ def generate_provision(e: Engine, category: str, year: int, description: str, de
 
         session.flush()
         session.commit()
+
+
+def create_salaries(e: Engine, mois: dt.date, declarant: str, simulate: bool):
+    """ Créer des salaires pour un mois donné"""
+    print(f'Attempting to generate salary for month : {mois}')
+
+    # Constants
+    compte = 'Crédit Agricole'
+    categorie_salaire = 'Salaire'
+    categorie_impot = 'Impôt Revenu'
+    categorie_ail = 'Ail'
+    categorie_note_de_frais = 'Notes De Frais'
+    date_insertion = dt.date.today()
+
+    with Session(e) as session:
+        # Création du numéro de transaction
+        maxnumber = get_max_number(session) + 1
+        print(f'max number retrieved : {maxnumber}')
+        # retrieve salarial data
+        salaire_infos = get_salaries(session, mois)
+        print(f'infos salaires retrieved : {salaire_infos}')
+        # try to find the original salary
+        print(f'trying to find a transaction for month {mois} and amount : {salaire_infos["total"]}')
+        salaire_transaction = get_salary_transaction(session, salaire_infos['total'], mois)
+
+        if salaire_transaction == None:
+            # no salaire found. Proceed anyway
+            parent_id = None
+            date_salaire = mois - dt.timedelta(days=2)
+            print('could not find a salary transaction')
+        else:
+            # salaire found. Do it.
+            parent_id = salaire_transaction.index
+            date_salaire = salaire_transaction.date
+            print(f'salary transaction found : {salaire_transaction}')
+
+        # Create the job
+        salaire_job = Job(job_key=Job.type_salary, job_mois=mois, job_timestamp=dt.datetime.now())
+        session.add(salaire_job)
+        print(f'Job created : {salaire_job}')
+
+        # Create the transactions
+        to_insert = []
+        to_insert.append(Mouvement(description=f'Salaire net pour le mois {mois}',
+                              recette=salaire_infos['salaire_net'],
+                              depense=0,
+                              categorie=categorie_salaire,
+                              )
+                    )
+
+        to_insert.append(Mouvement(description=f'Impôt revenu sur le salaire du {mois}',
+                              recette=0,
+                              depense=-salaire_infos['impot_salaire'],
+                              categorie=categorie_impot,
+                              )
+                    )
+
+        to_insert.append(Mouvement(description=f'AIL net pour le mois {mois}',
+                              recette=salaire_infos['logement'],
+                              depense=0,
+                              categorie=categorie_ail,
+                              )
+                    )
+
+        if salaire_infos['autre'] > 0:
+            to_insert.append(Mouvement(description=f'Notes de frais pour le {mois}',
+                                  recette=salaire_infos['autre'],
+                                  depense=0,
+                                  categorie=categorie_note_de_frais,
+                                  )
+                        )
+
+        if salaire_infos['prime_net'] > 0:
+            to_insert.append(Mouvement(description=f'Prime nette pour le mois {mois}',
+                                  recette=salaire_infos['prime_net'],
+                                  depense=0,
+                                  categorie=categorie_salaire,
+                                  economie='true',
+                                  )
+                        )
+
+            to_insert.append(Mouvement(description=f'Impôt sur la prime pour le mois {mois}',
+                                  recette=0,
+                                  depense=-salaire_infos['impot_prime'],
+                                  categorie=categorie_salaire,
+                                  economie='true',
+                                  )
+                        )
+        # add the general metadata
+        for mvt in to_insert:
+            mvt.date = date_salaire
+            mvt.date_insertion = date_insertion
+            mvt.no = maxnumber
+            mvt.index_parent = parent_id
+            mvt.job = salaire_job
+            mvt.declarant = declarant
+            mvt.mois = mois
+            mvt.compte = compte
+            # appending to the session
+            session.add(mvt)
+
+        # modify the original salary
+        if salaire_transaction != None:
+            salaire_transaction.recette_initiale = salaire_transaction.recette
+            salaire_transaction.recette = 0
+            session.add(salaire_transaction)
+            print(f'Original transaction neutralized')
+
+
+        # Closing the session and committing
+        session.flush()
+        if not simulate:
+            session.commit()
+            print(f'Salary import done')
+        else:
+            print(f'No import, just simulating')

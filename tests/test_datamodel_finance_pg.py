@@ -20,7 +20,6 @@ class TestSalary(TestCase):
             mois = all_salaries[0]['mois']
             one_salary = get_salaries(session, mois)
             self.assertGreater(len(one_salary), 0, f'Could not find a salary for the specific month : {mois}')
-            print(one_salary)
 
     def test_get_salary_transaction(self):
         amount = 5968.56
@@ -29,7 +28,8 @@ class TestSalary(TestCase):
         e = get_pgfin_engine()
         with Session(e) as session:
             mvt = get_salary_transaction(session, amount, mois)
-            print(mvt)
+
+        self.assertIsNotNone(mvt, f"couldn't find transaction of {amount}")
 
 
 class TestNumber(TestCase):
