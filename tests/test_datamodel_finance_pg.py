@@ -1,3 +1,4 @@
+import datetime
 from unittest import TestCase
 
 import pandas as pd
@@ -5,7 +6,7 @@ from sqlalchemy import select, Column
 from sqlalchemy.orm import Session
 
 from datamodel_finance_pg import get_salaries, get_max_number, get_salary_transaction, \
-    get_remaining_provisioned_expenses, get_events, Mouvement
+    get_remaining_provisioned_expenses, get_events, Mouvement, get_balances, get_categorized_provisions
 from engines import get_pgfin_engine
 from datetime import date
 
@@ -70,5 +71,14 @@ class TestORM(TestCase):
         print(c.name)
         print(c.key)
 
-#        for c in Mouvement.__table__.columns:
- #           print(c)
+
+    def test_get_balances(self):
+        e = get_pgfin_engine()
+        df = get_balances(e, date.today() - datetime.timedelta(weeks=12))
+        print(df)
+
+    def test_get_categorized_provisions(self):
+        e = get_pgfin_engine()
+        df = get_categorized_provisions(e, category_filter='Téléphone', month=date(2025, 3, 1), economy_mode=False)
+
+        print(df)

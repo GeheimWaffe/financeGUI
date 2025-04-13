@@ -7,6 +7,8 @@ import PySimpleGUI as sg
 from sqlalchemy import select, and_, or_, not_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+import matplotlib.pyplot as plt
+from io import BytesIO
 
 import engines
 import pandas as pd
@@ -17,7 +19,7 @@ from datamodel_finance_pg import get_remaining_provisioned_expenses, get_soldes,
     deactivate_transaction, get_categories, get_comptes, Mouvement, \
     import_transaction, MapCategorie, import_keyword, get_transaction, get_events, get_provisions_for_month, \
     get_salaries, get_type_comptes, get_matching_keywords, split_mouvement, simple_split, apply_mass_update, \
-    create_salaries
+    create_salaries, get_balances, get_categorized_provisions, get_groups, Classifier
 
 # Connexion à la base de données PostgreSQL
 engine = engines.get_pgfin_engine()
@@ -30,11 +32,11 @@ declarants = ['Vincent', 'Aurélie']
 
 
 def fetch_mouvements(offset_size, offset=0, search_filter="", sort_column=None, sort_order="asc",
-                               category_filter: str = None,
-                               compte_filter: str = None, month_filter: datetime.date = None,
-                               reimbursable: bool = False,
-                               affectable: bool = False, provisions: bool = False,
-                               economy_mode: bool = False) -> pd.DataFrame:
+                     category_filter: str = None,
+                     compte_filter: str = None, month_filter: datetime.date = None,
+                     reimbursable: bool = False,
+                     affectable: bool = False, provisions: bool = False,
+                     economy_mode: bool = False) -> pd.DataFrame:
     """ Utilisation de l'ORM """
     stmt = select(Mouvement.index, Mouvement.description, Mouvement.label_utilisateur, Mouvement.categorie,
                   Mouvement.date, Mouvement.mois, Mouvement.depense, Mouvement.recette, Mouvement.provision_payer,
@@ -43,9 +45,9 @@ def fetch_mouvements(offset_size, offset=0, search_filter="", sort_column=None, 
 
     if search_filter:
         stmt = stmt.where(Mouvement.description.ilike(f"%%{search_filter}%%"))
-    if category_filter:
+    if not category_filter is None:
         stmt = stmt.where(Mouvement.categorie == category_filter)
-    if compte_filter:
+    if not compte_filter is None:
         stmt = stmt.where(Mouvement.compte == compte_filter)
     if economy_mode:
         stmt = stmt.where(Mouvement.economie == 'true')
@@ -85,6 +87,10 @@ def fetch_provisions(offset_size: int, category_filter: str, month_filter: datet
                           provisions=True, economy_mode=economy_mode)
     df = df[["index", "Description", "Provision"]]
     return df
+
+
+def fetch_categorized_provisions(category_filter: str, month_filter: datetime.date, economy_mode: bool) -> pd.DataFrame:
+    return get_categorized_provisions(engine, category_filter, month_filter, economy_mode)
 
 
 def fetch_events(category_filter: str) -> pd.DataFrame:
@@ -135,6 +141,38 @@ def fetch_keywords():
         result = session.scalars(select(MapCategorie).order_by(MapCategorie.categorie)).all()
 
     return result
+
+
+def fetch_balances():
+    first_month = datetime.date.today() - datetime.timedelta(weeks=12)
+    result = get_balances(engine, first_month)
+    return result
+
+
+def classify(value: str, classification_matrix):
+    for pattern, result in classification_matrix:
+        if pattern in value:
+            return (pattern, result)
+    return (None, 'Common')
+
+
+def categorize_provisions(transactions: pd.DataFrame, patterns: pd.DataFrame) -> pd.DataFrame:
+    """ categorizes the provisions in groups and patterns"""
+
+    # Classifying
+    transactions['Group'] = transactions['Description'].apply(classify, classification_matrix=patterns.values)
+
+    transactions[['Pattern', 'Group']] = transactions['Group'].apply(pd.Series)
+    # Returning
+    result = transactions[['Group', 'Pattern', 'index', 'Description', 'Solde', 'Provision']].sort_values(
+        ['Group', 'Description'])
+
+    return result
+
+
+def draw_piechart(data: pd.DataFrame, value_field_name: str):
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ax.pie(data[value_field_name], labels=data.index, autopct='%1.1f%', colors=['#E95420', '#2C001E'])
 
 
 def split_value(value: float, no_periods: int, rounding: int) -> []:
@@ -286,7 +324,12 @@ def show_mass_transaction_editor(indexes: list):
     """ Window to edit transactions en masse"""
     layout = [
         [sg.Text(f"choose properties for following transactions :{indexes}")],
+        [sg.Text('Description :', size=(15, 1)), sg.Input(key='-DESCRIPTION-', size=(25, 1))],
+        [sg.Text("Catégorie :", size=(15, 1)), common_category_combo()],
         [sg.Text("Label utilisateur :", size=(15, 1)), sg.Input(key="-LABEL-", size=(25, 1))],
+        [sg.Text("Mois :", size=(15, 1)),
+         sg.Input(key="-MOIS-", size=(12, 1)),
+         sg.CalendarButton("Calendar", target="-MOIS-", format="%Y-%m-%d")],
         [sg.Text("Date d'événement :"), sg.Input(key="-DATE-", size=(12, 1)),
          sg.CalendarButton("Calendar", target="-DATE-", format="%Y-%m-%d")],
         [sg.Text("Numéro de référence : "), sg.InputText(size=(25, 1), key='-NO-REFERENCE-')],
@@ -304,9 +347,13 @@ def show_mass_transaction_editor(indexes: list):
             break
         elif event == '-VALIDER-':
             result = Mouvement()
+            result.description = values['-DESCRIPTION-'] if values['-DESCRIPTION-'] else None
             result.label_utilisateur = values['-LABEL-'] if values['-LABEL-'] else None
             result.no_de_reference = values['-NO-REFERENCE-'] if values['-NO-REFERENCE-'] else None
             result.date_remboursement = datetime.date.fromisoformat(values['-DATE-']) if values['-DATE-'] else None
+            result.categorie = values['-CATEGORIE-'] if values['-CATEGORIE-'] else None
+            if values['-MOIS-']:
+                result.mois = convert_to_month(values['-MOIS-'])
             window.close()
             return result
     # return the values
@@ -399,11 +446,30 @@ def show_transaction_editor(editable: Mouvement) -> Mouvement:
 
 
 def show_provision_editor(offset_size: int, categorie: str, mois: datetime.date, economy_mode: bool = False):
-    # Retrieve the data
-    df = fetch_provisions(offset_size=offset_size, category_filter=categorie, month_filter=mois,
+    # Retrieve the grouped provisions and transactions
+    df_groups = fetch_categorized_provisions(category_filter=categorie, month_filter=mois, economy_mode=economy_mode)
+    df_groups.sort_values('Group', inplace=True)
+
+    # Retrieve the provisions
+    df = fetch_mouvements(offset_size=offset_size, category_filter=categorie, month_filter=mois,
                           economy_mode=economy_mode)
 
+    # Retrieve the patterns (a dataframe with classes and patterns
+    patterns = get_groups(engine)
+
+    # show the result
+    df = categorize_provisions(df, patterns)
+
     layout = [
+        [sg.Table(values=df_groups.values.tolist(), headings=list(df_groups.columns), key='-GROUPS-',
+                  enable_events=True, enable_click_events=True)],
+        [sg.Button('Delete Group', size=(15, 1), key='-DELETE-GROUP-'),
+         sg.Button('New Group', size=(15, 1), key='-NEW-GROUP-')],
+        [sg.Text("Provisions :")],
+        [sg.Table(values=df.values.tolist(), headings=list(df.columns), key="-PROVISIONS-",
+                  enable_events=True,
+                  justification="center", auto_size_columns=True,
+                  num_rows=20, enable_click_events=True)],
         [sg.Text("Description :", size=(25, 1)),
          sg.Input(key="-DESCRIPTION-", size=(25, 1))],
         [sg.Text("Provision Dépense (€) :", size=(15, 1)),
@@ -411,19 +477,13 @@ def show_provision_editor(offset_size: int, categorie: str, mois: datetime.date,
          sg.Text("Provision Recette (€) :", size=(15, 1)),
          sg.InputText(key="-RECETTE-", size=(10, 1), default_text="0.00")],
         [sg.Checkbox("Create for remaining year ?", default=False, key='-ALL-YEAR-')],
-        [sg.HorizontalSeparator()],  # Ligne de séparation
-
-        [common_valider_button(), common_cancel_button()],
-        [sg.HorizontalSeparator()],
-        [sg.Table(values=df.values.tolist(), headings=list(df.columns), key="-PROVISIONS-", enable_events=True,
-                  justification="center", auto_size_columns=True,
-                  num_rows=20, enable_click_events=True)],
-        [common_delete_button()]
+        [common_valider_button()],
+        [common_cancel_button()]
     ]
 
     # Build the window
     window = sg.Window("Editez une provision", layout, modal=True, element_justification="left", font=("Calibri", 12))
-
+    selected_patterns = None
     while True:
         event, values = window.read()
         update_values = False
@@ -433,11 +493,29 @@ def show_provision_editor(offset_size: int, categorie: str, mois: datetime.date,
             return None  # Annulation
         elif isinstance(event, tuple) and event[0] == "-PROVISIONS-" and event[1] == "+CLICKED+":
             row, col = event[2]  # Récupère la ligne et la colonne cliquées
-            if row >= 0:
-                index = int(df.iloc[row, 0])
-            else:
-                index = -1
+            try:
+                if row >= 0:
+                    index = int(df.iloc[row, 2])
+                else:
+                    index = -1
+            except TypeError:
+                pass  # no row selected
+        elif isinstance(event, tuple) and event[0] == '-GROUPS-' and event[1] == '+CLICKED+':
+            row, col = event[2]
+            pass
+        elif event == '-NEW-GROUP-':
+            # creating a new group from scratch
+            group_name = sg.PopupGetText('Group name ?', modal=True)
+            keyword = sg.PopupGetText('Associated Keyword ?', modal=True)
 
+            if group_name and keyword:
+                # Create a new pattern
+                cl = Classifier(patterns=keyword, classes=group_name)
+                with Session(engine) as session:
+                    session.add(cl)
+                    session.commit()
+                    sg.popup_ok(f'Creation of classifier : {cl} done')
+                    update_values = True
         elif event == "-DELETE-":
             # identify the deleted provision
             if index >= 0:
@@ -477,9 +555,16 @@ def show_provision_editor(offset_size: int, categorie: str, mois: datetime.date,
 
         # Managing updates
         if update_values:
-            df = fetch_provisions(offset_size=offset_size, category_filter=categorie, month_filter=mois,
+            patterns = get_groups(engine)
+            df_groups = fetch_categorized_provisions(category_filter=categorie, month_filter=mois,
+                                                     economy_mode=economy_mode)
+            df_groups.sort_values('Group', inplace=True)
+
+            df = fetch_mouvements(offset_size=offset_size, category_filter=categorie, month_filter=mois,
                                   economy_mode=economy_mode)
+            df = categorize_provisions(df, patterns)
             window['-PROVISIONS-'].update(df.values.tolist())
+            window['-GROUPS-'].update(df_groups.values.tolist())
 
 
 def show_existing_keywords(description: str):
@@ -614,6 +699,29 @@ def show_new_transaction_editor():
 
             except ValueError:
                 sg.popup_error("❌ Veuillez entrer des montants valides !", font=("Calibri", 12), text_color="red")
+
+
+def show_reimbursement_plan(account: str):
+    """ displays a GUI which enables creation and backup of a savings plan"""
+    layout = [
+        [sg.Column(
+            [[sg.Text("Interest Rate"), sg.InputText(default_text="0.0", size=(3, 1), key='-TAUX-')],
+            [sg.Text('Montant emprunté'), sg.InputText(default_text="0.0", size=(9, 1), key='-EMPRUNT-')],
+            [sg.Text('Durée (mois)'), sg.InputText(default_text="0", size=(3, 1), key='-DUREE-')],
+            [sg.Text('Mois de départ'), sg.Input(key="-MOIS-", size=(12, 1)),
+             sg.CalendarButton("Calendar", target="-MOIS-", format="%Y-%m-%d")],
+            [sg.Button('Calculate')]]
+        ), sg.VerticalSeparator(), sg.Table(values=[], headings=('Capital', 'Capital Restant Dû'), key='-PLAN-')]
+    ]
+
+    window = sg.Window(f"Manage Reimbursement scheme for {account}", layout=layout, modal=True)
+
+    while True:
+        event, values = window.read()
+        if event == sg.WIN_CLOSED:
+            break
+
+    window.close()
 
 
 def manage_salaries() -> bool:
@@ -905,32 +1013,70 @@ def manage_keywords(df: pd.DataFrame, offset_size: int):
     - a calculation of the rate of transactions matching with a pattern
     - a table with the unmatched transactions
     """
-    # retrieve the keywords
-    keywords = fetch_keywords()
-    kw_list = [kw.keyword for kw in keywords]
 
-    df['Matched ?'] = df.apply(lambda x: any([True if kw in x.Description else False for kw in kw_list]), axis=1)
-
-    percentage = len(df.loc[df['Matched ?']]) / len(df)
     layout = [
-        [sg.Text(f"{len(keywords)} keywords retrieved")],
-        [sg.Text(f"{percentage * 100} % of the transactions were matched")],
-        [sg.Table(values=df.loc[~df['Matched ?']].values.tolist(), headings=list(df.columns), key="-MVTS-",
+        [sg.Text("", key='-COUNTER-')],
+        [sg.Text("", key='-PERCENT-')],
+        [sg.Table(values=df.values.tolist(), headings=list(df.columns), key="-MVTS-",
                   enable_events=True,
                   justification="center", auto_size_columns=True,
-                  num_rows=offset_size, enable_click_events=True)]
+                  num_rows=20, enable_click_events=True)],
+        [sg.Button("Add Keyword", key='-MATCH-', size=(15, 1))],
+        [sg.HorizontalSeparator()],
+        [sg.Text("", key='-STATUS-BAR-')]
     ]
 
     # display
-    window = sg.Window("Checking efficiency of pattern recognition", layout, modal=True)
+    window = sg.Window("Checking efficiency of pattern recognition", layout, modal=True, finalize=True)
 
     # Loop
+    update_values = True
+    status_message = 'Initialized'
     while True:
+        # calculate values
+        if update_values:
+            # retrieve the keywords
+            keywords = fetch_keywords()
+            kw_list = [kw.keyword for kw in keywords]
+            df['Matched ?'] = df.apply(lambda x: any([True if kw in x.Description else False for kw in kw_list]),
+                                       axis=1)
+            unmatched = df.loc[~df['Matched ?']]
+            percentage = 1 - len(unmatched) / len(df)
+            # update layout
+            window['-COUNTER-'].update(f"{len(keywords)} keywords retrieved")
+            window['-PERCENT-'].update(f"{percentage * 100:.2f} % of the transactions were matched")
+            window['-MVTS-'].update(values=unmatched.values.tolist())
+            # ensure no further updates are done
+            update_values = False
+
+        # start of the loop
         event, values = window.read()
 
         if event == sg.WIN_CLOSED:
             window.close()
             break
+        elif event == '-MATCH-':
+            # request a new keyword
+            row = values['-MVTS-'][0]
+            if row >= 0:
+                description = unmatched.iloc[row, 1]
+                category = unmatched.iloc[row, 3]
+                mc = show_keyword_import(description, category)
+                if not mc is None:
+                    try:
+                        import_keyword(engine, mc)
+                        status_message = f"Keyword imported for category"
+                        update_values = True
+                    except IntegrityError:
+                        status_message = f"keyword already exists"
+        elif isinstance(event, tuple) and event[0] == '-MVTS-' and event[1] == '+CLICKED+':
+            row, col = event[2]
+            index = unmatched.iloc[row, 0]
+            if row >= 0:
+                description = unmatched.iloc[row, 1]
+                status_message = f"selected transaction {description} at position {row}"
+
+        window['-STATUS-BAR-'].update(status_message)
 
 
 def main():
@@ -949,7 +1095,7 @@ def main():
     reimbursable_filter = False
     affectable_filter = False
     economy_mode = False
-    sort_column='index'
+    sort_column = 'index'
     index: int = -1
     row: int = -1
     description = ''
@@ -962,6 +1108,9 @@ def main():
 
     # type de comptes
     ctypes = fetch_compte_types()
+
+    # balances
+    balances = fetch_balances()
 
     # Définition de la structure de la fenêtre
     layout = [
@@ -982,11 +1131,17 @@ def main():
         [sg.Button('⇅ Date', key='-SORT-DATE-', size=(6, 1)), sg.Button('⇅ index', key='-SORT-INDEX-', size=(7, 1))],
         [sg.Table(values=df.values.tolist(), headings=list(df.columns), key="-MVTS-", enable_events=True,
                   justification="center", auto_size_columns=True,
-                  num_rows=offset_size, enable_click_events=True),
+                  num_rows=offset_size, enable_click_events=True,
+                  right_click_menu=["", ["Filtrer par cette catégorie..."]]),
          sg.Column([
              [sg.Combo(values=ctypes, default_value=selected_type, key='-CTYPES-', enable_events=True)],
              [sg.Table(values=soldes, headings=solde_headers, key="-SOLDES-",
                        justification='center', auto_size_columns=True)],
+             [sg.Text('Equilibre des virements')],
+             [sg.Table(values=balances.values.tolist(), headings=list(balances.columns), key='-BALANCES-',
+                       justification='center', auto_size_columns=True)]
+         ], vertical_alignment='top'),
+         sg.Column([
              [sg.Button("New Transaction", size=(15, 1))],
              [sg.Button("Deactivate", size=(15, 1))],
              [sg.Button("Edit", size=(15, 1))],
@@ -996,7 +1151,9 @@ def main():
              [sg.Button("Link", size=(15, 1))],
              [sg.InputText(default_text="2", key='-SPLIT-COUNT-', size=(10, 1))],
              [sg.Button("Split Custom", size=(15, 1))],
-             [sg.Button("Split Yearly", size=(15, 1))]], element_justification='top')
+             [sg.Button("Split Yearly", size=(15, 1))],
+             [sg.Button("Reimbursement Scheme", size=(15, 1))]
+         ], vertical_alignment='top')
          ],
         [sg.Button("Previous", size=(15, 1)), sg.Button("Next", size=(15, 1)),
          sg.Combo(values=[20, 50, 100], default_value=20, readonly=True, enable_events=True, key='-OFFSET-',
@@ -1038,6 +1195,11 @@ def main():
         elif event == "-CATEGORIE-":
             category_filter = values["-CATEGORIE-"]
             update_values = True
+        elif event == "Filtrer par cette catégorie...":
+            selected_row = values["-MVTS-"]
+            if selected_row:
+                category_filter = df.iloc[selected_row[0], 3]
+                update_values = True
         elif event == "-COMPTE-":
             compte_filter = values["-COMPTE-"]
             update_values = True
@@ -1160,15 +1322,25 @@ def main():
             deactivate_transaction(engine, index)
             status_message = f"Transaction deactivated {index}"
             update_values = True
+        elif event == "Reimbursement Scheme":
+            # retrieve the account
+            account = values['-SOLDES-']
+            if len(account) > 0:
+                # get the corresponding account label
+                account_label = soldes[account[0]][0]
+                show_reimbursement_plan(account_label)
         if update_values:
             df = fetch_mouvements(offset_size=offset_size, offset=offset, search_filter=desc_filter,
-                                            sort_column=sort_column, sort_order="desc", category_filter=category_filter,
-                                            compte_filter=compte_filter, reimbursable=reimbursable_filter,
-                                            affectable=affectable_filter, economy_mode=economy_mode)
+                                  sort_column=sort_column, sort_order="desc", category_filter=category_filter,
+                                  compte_filter=compte_filter, reimbursable=reimbursable_filter,
+                                  affectable=affectable_filter, economy_mode=economy_mode)
             window["-MVTS-"].update(values=df.values.tolist())
             soldes = fetch_soldes(selected_type)
             window["-SOLDES-"].update(values=soldes)
-            window['-ECONOMY-'].update(text='Economies' if economy_mode else 'All Expenses', button_color=get_toggle_style(economy_mode))
+            balances = fetch_balances()
+            window['-BALANCES-'].update(values=balances.values.tolist())
+            window['-ECONOMY-'].update(text='Economies' if economy_mode else 'All Expenses',
+                                       button_color=get_toggle_style(economy_mode))
         # Updating the status bar
         window["-STATUS-BAR-"].update(status_message)
     # Fermeture de la fenêtre
