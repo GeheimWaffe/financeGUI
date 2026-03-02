@@ -1,15 +1,23 @@
 import datetime as dt
 from engines import get_pgfin_engine, get_sqlite_engine
-from datamodel_finance_pg import Compte, Categorie, Mouvement, Base, MapOrganisme, Job, Salaire, \
-    get_remaining_provisioned_expenses, close_provision, split_mouvement, \
-    generate_provision, create_salaries
+from datamodel import Compte, Categorie, Mouvement, Base, MapOrganisme, Job, Salaire
 from sqlalchemy import select
+
+import pandas as pd
+
+from functions import fetch_mouvements, get_remaining_provisioned_expenses, close_provision, create_salaries, \
+    split_mouvement, generate_provision
 
 # create the engine
 e = get_pgfin_engine()
 
 # create the session
 from sqlalchemy.orm import Session
+
+pd.set_option('display.max_columns', None)
+
+def makesession() -> Session:
+    return Session(e)
 
 
 def add_months(current_date: dt.date, months_to_add: int) -> dt.date:
@@ -120,6 +128,21 @@ def categories():
     session.close()
 
 
+def list_mouvements():
+    print('Listing the Mouvements')
+    # Colonnes à voir dans le formulaire
+    view_columns = ["index", "Label utilisateur",
+                    "Catégorie", "Date", "Mois", "Solde", "Numéro de référence"]
+
+    # Définition des variables d'état
+    offset_size = 30  # Default value
+    offset = 0
+    with makesession() as s:
+        df = fetch_mouvements(s, view=view_columns, offset_size=offset_size, sort_column="index", sort_order="desc")
+
+    print(df)
+
+
 def mouvements():
     print('Welcome to the Mouvements interface ! ')
     stay = True
@@ -149,7 +172,7 @@ def mouvements():
             # récupérer la liste des derniers salaires
             listmois = get_last_salary_months()
             mois = dt.date.fromisoformat(get_list_input([m.strftime('%Y-%m-%d') for m in listmois]))
-            create_salaries(e, mois, 'Vincent', False)
+            create_salaries(e, 0, mois, False)
         if choice == '5':
             shutdown_category()
         if choice == '6':

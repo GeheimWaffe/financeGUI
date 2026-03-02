@@ -1,5 +1,6 @@
 # creating the engine
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 from pathlib import Path
 
 def get_pgfin_engine(echo=False):
@@ -10,3 +11,6 @@ def get_sqlite_engine(dbpath: list, echo=False):
     abs_path = Path().home().joinpath(*dbpath).as_posix()
     connection_string += abs_path
     return create_engine(connection_string, echo=True)
+
+def makesession() -> Session:
+    return Session(get_pgfin_engine())
