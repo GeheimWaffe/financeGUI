@@ -161,12 +161,16 @@ def mouvements():
             stay = False
         if choice == '1':
             id_mouvement = get_int_input('transaction')
-            split_mouvement(id_mouvement)
+            with Session(e) as session:
+                split_mouvement(id_mouvement)
+                session.commit()
             print('transaction splitted')
         if choice == '2':
             id_mouvement = get_int_input('transaction')
             no_periods = get_int_input('number of splitting periods')
-            split_mouvement(id_mouvement, mode='custom', periods=no_periods)
+            with Session(e) as session:
+                split_mouvement(id_mouvement, mode='custom', periods=no_periods)
+                session.commit()
             print('transaction splitted')
         if choice == '4':
             # récupérer la liste des derniers salaires

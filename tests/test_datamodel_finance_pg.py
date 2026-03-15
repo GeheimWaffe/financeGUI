@@ -50,8 +50,8 @@ class TestORM(TestCase):
         self.session = Session(self.eng)
 
     def test_get_balances(self):
-        e = get_pgfin_engine()
-        df = get_balances(e, date.today() - datetime.timedelta(weeks=12))
+        with self.session as session:
+            df = get_balances(session, date.today() - datetime.timedelta(weeks=12))
         print(df)
 
     def test_get_categorized_provisions(self):

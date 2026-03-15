@@ -4,7 +4,44 @@ from sqlalchemy.orm import Session
 
 from engines import get_pgfin_engine
 
-from functions import get_yearly_realise, get_groups_of_category
+from functions import get_yearly_realise, get_groups_of_category, get_grouped_transactions, get_grouped_transactions_2
+
+from datetime import date, timedelta
+
+class TestSoldes(TestCase):
+    def setUp(self) -> None:
+        self.engine = get_pgfin_engine()
+
+    def test_grouped_soldes(self):
+        with Session(self.engine) as session:
+            period_end = date.today()
+            period_begin = period_end - timedelta(days=30)
+
+            df = get_grouped_transactions(session, 'Courant', period_begin, period_end)
+
+
+        print(df)
+
+    def test_grouped_soldes_2_courant(self):
+        with Session(self.engine) as session:
+            period_end = date.today()
+            period_begin = period_end - timedelta(days=30)
+
+            df = get_grouped_transactions_2(session, 'Courant', period_begin, period_end)
+
+
+        print(df)
+        print(df.loc['Crédit Lyonnais'])
+
+    def test_grouped_soldes_2_economies(self):
+        with Session(self.engine) as session:
+            period_end = date.today()
+            period_begin = period_end - timedelta(days=30)
+
+            df = get_grouped_transactions_2(session, 'Economies', period_begin, period_end)
+
+        print(df.loc['Livret A'])
+
 
 
 class TestGetRealise(TestCase):

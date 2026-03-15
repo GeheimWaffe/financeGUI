@@ -21,11 +21,11 @@ import pandas as pd
 from datamodel import Mouvement, MapCategorie, Classifier
 from functions import get_comptes, get_type_comptes, fetch_mouvements, get_groups, get_categorized_provisions, \
     import_transaction, get_categories, get_events, get_transaction, get_yearly_realise, get_groups_of_category, \
-    get_solde, get_salaries, get_remaining_provisioned_expenses, close_provision, create_salaries, \
+    get_solde, get_remaining_provisioned_expenses, close_provision, create_salaries, \
     save_capital_reimbursements, get_provisions_for_month, deactivate_transactions, deactivate_transaction, \
     apply_mass_update, import_keyword, get_matching_keywords, get_keywords, simple_split, split_mouvement, split_number, \
     get_balances, calculate_labels, find_salary_transaction, get_salary_candidates, get_jobs, get_numeros_reference, \
-    save_map_categorie, identify_gaps, fetch_soldes, JobMapper
+    save_map_categorie, identify_gaps, fetch_soldes, JobMapper, split_value, get_salaries
 
 # Connexion à la base de données PostgreSQL
 engine = engines.get_pgfin_engine()
@@ -51,14 +51,6 @@ def fetch_provisions(view: Iterable, offset_size: int, category_filter: str, mon
     return df
 
 
-def fetch_salaries() -> pd.DataFrame:
-    with Session(engine) as session:
-        values = get_salaries(session)
-
-    df = pd.DataFrame(data=values)
-    return df
-
-
 def fetch_keywords():
     with Session(engine) as session:
         result = session.scalars(select(MapCategorie).order_by(MapCategorie.categorie)).all()
@@ -68,7 +60,8 @@ def fetch_keywords():
 
 def fetch_balances():
     first_month = datetime.date.today() - datetime.timedelta(weeks=12)
-    result = get_balances(engine, first_month)
+    with makesession() as session:
+        result = get_balances(session, first_month)
     return result
 
 
@@ -105,14 +98,6 @@ def categorize_provisions(transactions: pd.DataFrame, patterns: pd.DataFrame) ->
 def draw_piechart(data: pd.DataFrame, value_field_name: str):
     fig, ax = plt.subplots(figsize=(4, 4))
     ax.pie(data[value_field_name], labels=data.index, autopct='%1.1f%', colors=['#E95420', '#2C001E'])
-
-
-def split_value(value: float, no_periods: int, rounding: int) -> Iterable:
-    """ returns a correct split with rounded values"""
-    result = [round(value / no_periods, rounding)] * (no_periods - 1)
-    quotient = sum(result)
-    result += [round(value - quotient, rounding)]
-    return result
 
 
 def common_tag_combo(numeros_reference: list, readonly: bool, default_value: str = '') -> sg.Combo:
@@ -761,7 +746,8 @@ def form_manage_salaries() -> bool:
     status_message: str = ''
 
     # Variables d'état
-    df = fetch_salaries()
+    with makesession() as s:
+        df = get_salaries(s)
 
     # Layout
     layout = [
@@ -1867,14 +1853,11 @@ def form_main():
                 update_values = True
         elif event == "Invert":
             if index > 0:
-                with Session(engine) as session:
+                with makesession() as session:
                     existing = get_transaction(session, index)
                     inverted = existing.get_inverted()
-
-                # save
-                with makesession() as s:
-                    import_transaction(s, inverted)
-                    s.commit()
+                    import_transaction(session, inverted)
+                    session.commit()
 
                 # update the values
                 update_values = True
@@ -1919,7 +1902,9 @@ def form_main():
                 indexes = df.iloc[selected_rows, 0].values.tolist()
                 template = form_update_transactions(indexes, nos_ref)
                 if not template is None:
-                    apply_mass_update(engine, indexes, template)
+                    with makesession() as session:
+                        apply_mass_update(session, indexes, template)
+                        session.commit()
                     if not template.no_de_reference in nos_ref:
                         nos_ref = [template.no_de_reference] + nos_ref
                         update_tags = True
@@ -1949,19 +1934,25 @@ def form_main():
                 split_periods = int(values["-SPLIT-COUNT-"])
                 # Executing the split
                 #                split_mouvement(index, mode='custom', periods=split_periods)
-                with Session(engine) as session:
+                with makesession() as session:
                     splittable = get_transaction(session, index)
                     solde = splittable.get_solde()
                     splittable_month = splittable.mois
-                splitted_values, splitted_months = form_get_custom_split(split_periods, solde, splittable_month)
-                simple_split(engine, index, splitted_values, splitted_months)
+                    splitted_values, splitted_months = form_get_custom_split(split_periods, solde, splittable_month)
+                    simple_split(session, index, splitted_values, splitted_months)
+                    # committing
+                    session.flush()
+                    session.commit()
                 status_message = f"Splitting custom transaction {index} in {split_periods} parts"
                 update_values = True
             except ValueError:
                 sg.popup_error("Enter a valid number", title="Enter a number", button_color="red")
         elif event == "Split Yearly":
             # Executing the split
-            split_mouvement(engine, index)
+            with makesession() as session:
+                split_mouvement(session, index)
+                session.flush()
+                session.commit()
             status_message = f"Splitting yearly transaction {index}"
             update_values = True
         elif event == "Deactivate":
@@ -1971,7 +1962,9 @@ def form_main():
                 sg.PopupOK("No rows selected !")
             else:
                 indexes = df.iloc[selected_rows, 0].values.tolist()
-                deactivate_transactions(engine, indexes)
+                with makesession() as s:
+                    deactivate_transactions(s, indexes)
+                    s.commit()
                 status_message = f"Transactions deactivated : {str(len(indexes))}"
                 update_values = True
         elif event == "Reimbursement Scheme":

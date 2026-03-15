@@ -243,6 +243,87 @@ def get_solde(s: Session, compte: str, period_begin: date, period_end: date) -> 
     return df[['Jour', 'Solde', 'Cumul']].sort_index(ascending=True)
 
 
+def get_grouped_transactions(s: Session, compte_type: str, period_begin: date, period_end: date) -> pd.DataFrame:
+    """ calculates the running saldo for all accounts"""
+    stmt = select(Compte.compte_type, Mouvement.compte, Mouvement.date, Mouvement.depense, Mouvement.recette).join(
+        Compte).where(
+        Mouvement.date_out_of_bound == False).where(Mouvement.date <= period_end).where(
+        Compte.compte_type == compte_type)
+    df = pd.read_sql(stmt, s.connection(), coerce_float=True, parse_dates='Date')
+    # fill the values with zero, else the calculation of the solde doesn't work properly
+    df = df.fillna(0)
+    df['Solde'] = df['Recette'] - df['Dépense']
+    df = df.groupby(['compte_type', 'Compte', 'Date'])[['Solde']].sum().sort_index()
+    df['Cumul'] = df.groupby(level='Compte')['Solde'].cumsum()
+    df = df.loc[df.index.get_level_values('Date') >= pd.to_datetime(period_begin)]
+    # rounding
+    df = df.round(2)
+
+    # End
+    return df[['Solde', 'Cumul']].sort_index(ascending=True)
+
+
+def get_grouped_transactions_2(s: Session, compte_type: str, period_begin: date, period_end: date) -> pd.DataFrame:
+    """ calculates the running saldo for all accounts"""
+    # --- STEP 1 : calculates the starting saldos
+    stmt = select(Mouvement.compte, Mouvement.depense, Mouvement.recette).join(
+        Compte).where(
+        Mouvement.date_out_of_bound == False).where(Mouvement.date < period_begin).where(
+        Compte.compte_type == compte_type).where(Compte.compte_actif == True)
+    df = pd.read_sql(stmt, s.connection(), coerce_float=True, parse_dates='Date')
+
+    # aggregate
+    df = df.groupby(['Compte'])[['Dépense', 'Recette']].sum().fillna(0).round(2)
+    df['Solde'] = df['Recette'] - df['Dépense']
+    df = df.drop(columns=['Dépense', 'Recette'])
+    df = df.reset_index()
+    df['Date'] = period_begin
+
+    # 2. Création de la plage de dates complète
+    all_dates = pd.date_range(start=period_begin, end=period_end, freq='D')
+
+    # Création d'un MultiIndex complet
+    full_index = pd.MultiIndex.from_product(
+        [df['Compte'].unique(), all_dates],
+        names=['Compte', 'Date']
+    )
+
+    # 4. On réindexe le dataframe
+    # On met d'abord l'index sur Compte et Date, puis on réindexe avec le complet
+    df_exploded = (
+        df.set_index(['Compte', 'Date'])
+        .reindex(full_index)
+        .sort_index()
+    )
+
+    # 5. REMPLISSAGE (La partie magique)
+    # On groupe par compte pour ne pas mélanger les soldes, et on remplit vers le bas
+    df_exploded['Solde'] = df_exploded.groupby(level='Compte')['Solde'].ffill().fillna(0)
+
+    #  --- STEP 2 : calculates the variations in the period ---
+    stmt = select(Mouvement.compte, Mouvement.date, Mouvement.depense, Mouvement.recette).join(
+        Compte).where(
+        Mouvement.date_out_of_bound == False).where(Mouvement.date >= period_begin).where(
+        Mouvement.date <= period_end).where(
+        Compte.compte_type == compte_type)
+    df = pd.read_sql(stmt, s.connection(), coerce_float=True, parse_dates='Date')
+
+    # aggregate
+    df = df.groupby(['Compte', 'Date'])[['Dépense', 'Recette']].sum().fillna(0).round(2).sort_index()
+    df['Delta'] = df['Recette'] - df['Dépense']
+    df['Cumul'] = df.groupby(level='Compte')['Delta'].cumsum()
+    df = df.drop(columns=['Dépense', 'Recette', 'Delta'])
+
+    # --- STEP 3 : join the saldos and the variations ---
+    df_all = df_exploded.join(df)
+    df_all['Cumul'] = df_all.groupby(level='Compte')['Cumul'].ffill().fillna(0)
+
+    # --- END : calculation
+    df_all['Solde'] = df_all['Solde'] + df_all['Cumul']
+
+    return df_all
+
+
 def fetch_soldes(s: Session, compte_type: str) -> pd.DataFrame:
     """ Récupère les soldes des comptes courants"""
     """ Returns the current accounts"""
@@ -278,14 +359,9 @@ def get_salaries(s: Session, mois: date = None) -> list:
                      schema='dbview_schema')
 
     if mois == None:
-        result = s.execute(select(salaires))
-        return [{c.key: r[i] for i, c in enumerate(salaires.columns)} for r in result]
+        return pd.read_sql(select(salaires), s.connection(), parse_dates='mois')
     else:
-        result = s.execute(select(salaires).where(salaires.c['mois'] == mois)).first()
-        try:
-            return {c.key: result[i] for i, c in enumerate(salaires.columns)}
-        except IndexError:
-            raise IndexError(f'could not find a salary for month : {mois}')
+        return pd.read_sql(select(salaires).where(salaires.c['mois'] == mois), s.connection(), parse_dates='mois')
 
 
 def get_max_number(s: Session) -> int:
@@ -445,35 +521,6 @@ def create_salaries(e: Engine, parent_id: int, mois: dt.date, simulate: bool):
             print(f'No import, just simulating')
 
 
-def create_transaction(e: Engine, transaction_date: date, description: str, compte: str, category: str,
-                       depense: float, recette: float, transaction_month: date):
-    """ generate a set of provision for a given year"""
-    print(f'Generating a transaction for {category} with description {description}')
-
-    with Session(e) as session:
-        # retrieve the last valid number
-        max_number = get_max_number(session)
-        # create a job
-        job = Job(job_key=Job.type_import, job_timestamp=datetime.now())
-        # generate a set of provisions
-        mvt = Mouvement(date=transaction_date,
-                        description=description,
-                        compte=compte,
-                        categorie=category,
-                        mois=transaction_month,
-                        date_insertion=date.today(),
-                        depense=depense,
-                        recette=recette,
-                        no=max_number + 1,
-                        job=job
-                        )
-        session.add(mvt)
-        print(f'Transaction generated : {mvt}')
-
-        session.flush()
-        session.commit()
-
-
 def save_capital_reimbursements(e: Engine, reimbursement_scheme: pd.Series, target_account: str, target_category: str,
                                 start_date: date):
     """ Loads the reimbursements"""
@@ -595,22 +642,20 @@ def classify(value: str, classification_matrix):
     return 'Common'
 
 
-def deactivate_transactions(e: Engine, indexes: []):
-    with Session(e) as session:
-        mvts = session.scalars(select(Mouvement).where(Mouvement.index.in_(indexes)))
-        for m in mvts:
-            m.date_out_of_bound = True
+def deactivate_transactions(s: Session, indexes: list[int]):
+    mvts = s.scalars(select(Mouvement).where(Mouvement.index.in_(indexes))).all()
+    for m in mvts:
+        m.date_out_of_bound = True
+        s.add(m)
+    s.flush()
+    s.commit()
 
-        session.flush()
-        session.commit()
 
-
-def deactivate_transaction(e: Engine, index: int):
-    with Session(e) as session:
-        mvt = session.scalar(select(Mouvement).where(Mouvement.index == index))
-        if not mvt is None:
-            mvt.date_out_of_bound = True
-            session.commit()
+def deactivate_transaction(s: Session, index: int):
+    mvt = s.scalar(select(Mouvement).where(Mouvement.index == index))
+    if not mvt is None:
+        mvt.date_out_of_bound = True
+        s.commit()
 
 
 def update_transaction_category(e: Engine, index: int, cat: str, lab: str, mois: date):
@@ -623,28 +668,23 @@ def update_transaction_category(e: Engine, index: int, cat: str, lab: str, mois:
             session.commit()
 
 
-def apply_mass_update(e: Engine, indexes: [], template: Mouvement):
+def apply_mass_update(session: Session, indexes: list[int], template: Mouvement):
     """ Applies a mass update"""
-    with Session(e) as session:
-        # retrieve the movement
-        for i in indexes:
-            mvt = session.get(Mouvement, ident=i)
-            if not mvt is None:
-                if template.label_utilisateur:
-                    mvt.label_utilisateur = template.label_utilisateur
-                if template.no_de_reference:
-                    mvt.no_de_reference = template.no_de_reference
-                mvt.date_remboursement = template.date_remboursement
-                if not template.description is None:
-                    mvt.description = template.description
-                if not template.categorie is None:
-                    mvt.categorie = template.categorie
-                if not template.mois is None:
-                    mvt.mois = template.mois
-
-        # save
-        session.commit()
-    # end
+    # retrieve the movement
+    for i in indexes:
+        mvt = session.get(Mouvement, ident=i)
+        if not mvt is None:
+            if template.label_utilisateur:
+                mvt.label_utilisateur = template.label_utilisateur
+            if template.no_de_reference:
+                mvt.no_de_reference = template.no_de_reference
+            mvt.date_remboursement = template.date_remboursement
+            if not template.description is None:
+                mvt.description = template.description
+            if not template.categorie is None:
+                mvt.categorie = template.categorie
+            if not template.mois is None:
+                mvt.mois = template.mois
 
 
 def import_keyword(e: Engine, value: MapCategorie):
@@ -672,145 +712,135 @@ def get_keywords(e: Engine, active_flag: bool) -> pd.DataFrame:
                        e)
 
 
-def simple_split(e: Engine, index: int, values: list, months: list):
+def simple_split(session: Session, index: int, values: list, months: list):
     """ This is also a splitting function, but which assumes the values and months are already defined
 
-    :param e: the engine
+    :param session: the session
     :param index: index of the transaction to split
     :param values: list of split values
     :param months: list of split months"""
 
-    with Session(e) as session:
-        mvt = session.get(Mouvement, ident=index)
-        if not mvt is None:
-            # initier les variables
-            mvt.recette_initiale = mvt.recette
-            mvt.depense_initiale = mvt.depense
-            mvt.recette = 0
-            mvt.depense = 0
+    mvt = session.get(Mouvement, ident=index)
+    if not mvt is None:
+        # initier les variables
+        mvt.recette_initiale = mvt.recette
+        mvt.depense_initiale = mvt.depense
+        mvt.recette = 0
+        mvt.depense = 0
 
-            # Create a new job
-            job = Job(job_key=Job.type_split, job_timestamp=dt.datetime.now())
+        # Create a new job
+        job = Job(job_key=Job.type_split, job_timestamp=dt.datetime.now())
 
-            # create the sub-transactions
-            for i in range(len(values)):
-                session.add(
-                    Mouvement(date=mvt.date,
-                              description=mvt.description,
-                              recette=values[i] if values[i] > 0 else 0,
-                              depense=-values[i] if values[i] < 0 else 0,
-                              compte=mvt.compte,
-                              categorie=mvt.categorie,
-                              economie=mvt.economie,
-                              regle=mvt.regle,
-                              mois=months[i],
-                              date_insertion=mvt.date_insertion,
-                              provision_payer=mvt.provision_payer,
-                              provision_recuperer=mvt.provision_recuperer,
-                              date_remboursement=mvt.date_remboursement,
-                              organisme=mvt.organisme,
-                              date_out_of_bound=mvt.date_out_of_bound,
-                              taux_remboursement=mvt.taux_remboursement,
-                              fait_marquant=mvt.fait_marquant,
-                              no=mvt.no,
-                              no_de_reference=mvt.no_de_reference,
-                              index_parent=mvt.index_parent,
-                              label_utilisateur=mvt.label_utilisateur,
-                              declarant=mvt.declarant,
-                              employeur=mvt.employeur,
-                              job=job
-                              )
-                )
+        # create the sub-transactions
+        for i in range(len(values)):
+            session.add(
+                Mouvement(date=mvt.date,
+                          description=mvt.description,
+                          recette=values[i] if values[i] > 0 else 0,
+                          depense=-values[i] if values[i] < 0 else 0,
+                          compte=mvt.compte,
+                          categorie=mvt.categorie,
+                          economie=mvt.economie,
+                          regle=mvt.regle,
+                          mois=months[i],
+                          date_insertion=mvt.date_insertion,
+                          provision_payer=mvt.provision_payer,
+                          provision_recuperer=mvt.provision_recuperer,
+                          date_remboursement=mvt.date_remboursement,
+                          organisme=mvt.organisme,
+                          date_out_of_bound=mvt.date_out_of_bound,
+                          taux_remboursement=mvt.taux_remboursement,
+                          fait_marquant=mvt.fait_marquant,
+                          no=mvt.no,
+                          no_de_reference=mvt.no_de_reference,
+                          index_parent=mvt.index_parent,
+                          label_utilisateur=mvt.label_utilisateur,
+                          declarant=mvt.declarant,
+                          employeur=mvt.employeur,
+                          job=job
+                          )
+            )
 
-            # Update the original transaction
-            session.add(mvt)
-
-            # end
-            session.flush()
-            session.commit()
+        # Update the original transaction
+        session.add(mvt)
 
 
-def split_mouvement(e: Engine, index: int, mode: str = 'year', periods: int = 12, rounding: int = 2):
+def split_mouvement(session: Session, index: int, mode: str = 'year', periods: int = 12, rounding: int = 2):
     """ The function splits a row in the database
     It has two modes :
     - year : spreads over a calendar year
     - custom : spreads over a custom number of periods (by default : 12)
     """
-    with Session(e) as session:
-        mvt = session.get(Mouvement, ident=index)
-        if not mvt is None:
-            # initier les variables
-            rec = mvt.recette
-            dep = mvt.depense
+    mvt = session.get(Mouvement, ident=index)
+    if not mvt is None:
+        # initier les variables
+        rec = mvt.recette
+        dep = mvt.depense
 
-            # Logique spécifique au split annuel
-            if mode == 'year':
-                mois = [dt.date(mvt.mois.year, i + 1, 1) for i in range(periods)]
-            else:
-                mois = [mvt.mois] * periods
+        # Logique spécifique au split annuel
+        if mode == 'year':
+            mois = [dt.date(mvt.mois.year, i + 1, 1) for i in range(periods)]
+        else:
+            mois = [mvt.mois] * periods
 
-            if rec is None:
-                split_rec = None
-                rest_rec = None
-            else:
-                split_rec = round(rec / periods, rounding)
-                rest_rec = rec - (periods - 1) * split_rec
-                mvt.recette_initiale = rec
-                mvt.recette = 0
+        if rec is None:
+            split_rec = None
+            rest_rec = None
+        else:
+            split_rec = round(rec / periods, rounding)
+            rest_rec = rec - (periods - 1) * split_rec
+            mvt.recette_initiale = rec
+            mvt.recette = 0
 
-            if dep is None:
-                split_dep = None
-                rest_dep = None
-            else:
-                split_dep = round(dep / periods, rounding)
-                rest_dep = dep - (periods - 1) * split_dep
-                mvt.depense_initiale = dep
-                mvt.depense = 0
+        if dep is None:
+            split_dep = None
+            rest_dep = None
+        else:
+            split_dep = round(dep / periods, rounding)
+            rest_dep = dep - (periods - 1) * split_dep
+            mvt.depense_initiale = dep
+            mvt.depense = 0
 
-            deps = [split_dep] * (periods - 1) + [rest_dep]
-            recs = [split_rec] * (periods - 1) + [rest_rec]
+        deps = [split_dep] * (periods - 1) + [rest_dep]
+        recs = [split_rec] * (periods - 1) + [rest_rec]
 
-            # Create a new job
-            job = Job(job_key=Job.type_split, job_timestamp=dt.datetime.now())
+        # Create a new job
+        job = Job(job_key=Job.type_split, job_timestamp=dt.datetime.now())
 
-            # create the sub-transactions
-            for i in range(periods):
-                session.add(
-                    Mouvement(date=mvt.date,
-                              description=mvt.description,
-                              recette=recs[i],
-                              depense=deps[i],
-                              compte=mvt.compte,
-                              categorie=mvt.categorie,
-                              economie=mvt.economie,
-                              regle=mvt.regle,
-                              mois=mois[i],
-                              date_insertion=mvt.date_insertion,
-                              provision_payer=mvt.provision_payer,
-                              provision_recuperer=mvt.provision_recuperer,
-                              date_remboursement=mvt.date_remboursement,
-                              organisme=mvt.organisme,
-                              date_out_of_bound=mvt.date_out_of_bound,
-                              taux_remboursement=mvt.taux_remboursement,
-                              fait_marquant=mvt.fait_marquant,
-                              no=mvt.no,
-                              no_de_reference=mvt.no_de_reference,
-                              index_parent=mvt.index_parent,
-                              depense_initiale=mvt.depense_initiale,
-                              recette_initiale=mvt.recette_initiale,
-                              label_utilisateur=mvt.label_utilisateur,
-                              declarant=mvt.declarant,
-                              employeur=mvt.employeur,
-                              job=job
-                              )
-                )
+        # create the sub-transactions
+        for i in range(periods):
+            session.add(
+                Mouvement(date=mvt.date,
+                          description=mvt.description,
+                          recette=recs[i],
+                          depense=deps[i],
+                          compte=mvt.compte,
+                          categorie=mvt.categorie,
+                          economie=mvt.economie,
+                          regle=mvt.regle,
+                          mois=mois[i],
+                          date_insertion=mvt.date_insertion,
+                          provision_payer=mvt.provision_payer,
+                          provision_recuperer=mvt.provision_recuperer,
+                          date_remboursement=mvt.date_remboursement,
+                          organisme=mvt.organisme,
+                          date_out_of_bound=mvt.date_out_of_bound,
+                          taux_remboursement=mvt.taux_remboursement,
+                          fait_marquant=mvt.fait_marquant,
+                          no=mvt.no,
+                          no_de_reference=mvt.no_de_reference,
+                          index_parent=mvt.index_parent,
+                          depense_initiale=mvt.depense_initiale,
+                          recette_initiale=mvt.recette_initiale,
+                          label_utilisateur=mvt.label_utilisateur,
+                          declarant=mvt.declarant,
+                          employeur=mvt.employeur,
+                          job=job
+                          )
+            )
 
-            # Update the original transaction
-            session.add(mvt)
-
-            # end
-            session.flush()
-            session.commit()
+        # Update the original transaction
+        session.add(mvt)
 
 
 def split_number(to_split: float, periods: int, rounding: int) -> Iterable:
@@ -849,7 +879,7 @@ def generate_provision(e: Engine, category: str, year: int, description: str, de
         session.commit()
 
 
-def get_balances(e: Engine, first_month: date) -> pd.DataFrame:
+def get_balances(session: Session, first_month: date) -> pd.DataFrame:
     """ Calculates the balances per month"""
     stmt = select(Mouvement.mois, func.sum(Mouvement.depense).label('Dépense'),
                   func.sum(Mouvement.recette).label('Recette'),
@@ -859,7 +889,7 @@ def get_balances(e: Engine, first_month: date) -> pd.DataFrame:
         Mouvement.date_out_of_bound == False).group_by(
         Mouvement.mois)
 
-    df = pd.read_sql(stmt, e)
+    df = pd.read_sql(stmt, session.connection())
 
     return df
 
@@ -950,6 +980,15 @@ def save_map_categorie(e: Engine, value: MapCategorie, check_duplicates: bool):
         session.commit()
 
 
+def find_active_maps(s: Session, keyword: str) -> list[MapCategorie]:
+    """ Checks if there are any conflicting maps """
+    existing_keys = s.scalars(select(MapCategorie).where(not_(MapCategorie.inactif))).all()
+
+    result = [mc for mc in existing_keys if (mc.keyword in keyword) or (keyword in mc.keyword)]
+
+    return result
+
+
 def identify_gaps(s: Session, value: MapCategorie):
     stmt = select(Mouvement).where(Mouvement.date_out_of_bound == False).where(
         Mouvement.description.contains(value.keyword))
@@ -957,7 +996,6 @@ def identify_gaps(s: Session, value: MapCategorie):
                           Mouvement.organisme != value.organisme))
 
     df = pd.read_sql(stmt, s.connection())
-    df['Solde'] = df['Recette'] - df['Dépense']
     return df
 
 
@@ -984,3 +1022,11 @@ class JobMapper:
 
 def makesession() -> Session:
     return Session(engines.get_pgfin_engine())
+
+
+def split_value(value: float, no_periods: int, rounding: int) -> Iterable:
+    """ returns a correct split with rounded values"""
+    result = [round(value / no_periods, rounding)] * (no_periods - 1)
+    quotient = sum(result)
+    result += [round(value - quotient, rounding)]
+    return result

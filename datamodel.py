@@ -1,10 +1,9 @@
 import datetime as dt
-from datetime import datetime
+from datetime import datetime, date
 from typing import List
 
 from sqlalchemy import Boolean, ForeignKey, Engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, relationship
-from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, mapped_column, validates
 from sqlalchemy.types import String, Integer, Date, Numeric
 
 
@@ -18,7 +17,7 @@ class Compte(Base):
     compte: Mapped[str] = mapped_column('compte', String, primary_key=True, nullable=False)
     compte_minuscule: Mapped[str] = mapped_column('Compte Minuscule', String)
     compte_type: Mapped[str] = mapped_column('compte_type', String, nullable=False)
-    compte_actif: Mapped[bool] = mapped_column('compte_actif', Boolean, nullable=True)
+    compte_actif: Mapped[bool] = mapped_column('compte_actif', Boolean, default=True, nullable=True)
 
     mouvements: Mapped[List["Mouvement"]] = relationship(back_populates="compte_object", cascade="all, delete-orphan")
     map_salaires: Mapped[List["MapSalaire"]] = relationship(back_populates="compte_object",
@@ -115,6 +114,19 @@ class Mouvement(Base):
 
         return f'{typ} {self.description!r}, Compte : {self.compte}, Catégorie : {self.categorie}, Solde : {solde}, Provisions : {self.provision_recuperer}'
 
+    @validates('mois')
+    def validate_mois(self, key, value):
+
+        # Si c'est un objet datetime, on le convertit en date
+        if isinstance(value, datetime):
+            value = value.date()
+
+        # On force le jour au 1er du mois
+        if isinstance(value, date):
+            value = value.replace(day=1)
+
+        return value
+
     def get_solde(self) -> float:
         result = self.recette if self.recette else 0
         result -= self.depense if self.depense else 0
@@ -154,7 +166,7 @@ class MapCategorie(Base):
                                            comment="L'oragnisme sur lequel mapper le mouvement")
     monthshift: Mapped[str] = mapped_column('monthshift', Integer, nullable=True,
                                             comment='Un entier positif ou négatif pour décaler le mois de la transaction')
-    inactif: Mapped[bool] = mapped_column('inactif', Boolean,
+    inactif: Mapped[bool] = mapped_column('inactif', Boolean, default=False,
                                           comment='Indique si le mapping a été inactivé')
     employeur: Mapped[str] = mapped_column('employeur', String, nullable=True,
                                            comment="Permet de rattacher à un employeur et d'identifier la ligne comme un salaire")
