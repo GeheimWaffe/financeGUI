@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 import engines
 from datamodel import Compte, Mouvement, Job, Categorie, MapCategorie, LabelPrettifier, MapSalaire
+from dateutil import relativedelta
 
 
 def get_comptes(s: Session):
@@ -34,13 +35,16 @@ def fetch_mouvements(s: Session, view: Iterable, offset_size, offset=0, search_f
                      affectable: bool = False, provisions: bool = False, transactions: bool = False,
                      economy_mode: bool = False,
                      job_id: int = 0,
-                     tag_filter: str = None, faits_marquants: bool = False, skip_columns=None) -> pd.DataFrame:
+                     tag_filter: str = None, faits_marquants: bool = False, skip_columns=None,
+                     specific_date: date = None) -> pd.DataFrame:
     """ Utilisation de l'ORM """
     if skip_columns is None:
         skip_columns = []
     stmt = select(Mouvement.index, Mouvement.description, Mouvement.label_utilisateur, Mouvement.categorie,
+                  Mouvement.compte,
                   Mouvement.date, Mouvement.mois, Mouvement.depense, Mouvement.recette, Mouvement.provision_payer,
-                  Mouvement.provision_recuperer, Mouvement.no_de_reference, Mouvement.fait_marquant).where(
+                  Mouvement.provision_recuperer, Mouvement.no_de_reference, Mouvement.fait_marquant,
+                  Mouvement.taux_remboursement).where(
         Mouvement.date_out_of_bound == False)
 
     if search_filter:
@@ -70,6 +74,8 @@ def fetch_mouvements(s: Session, view: Iterable, offset_size, offset=0, search_f
         stmt = stmt.where(Mouvement.no_de_reference == tag_filter)
     if faits_marquants:
         stmt = stmt.where(Mouvement.fait_marquant != None)
+    if specific_date:
+        stmt = stmt.where(Mouvement.date == specific_date)
     if sort_column:
         stmt = stmt.order_by(Mouvement.__table__.c[sort_column].desc())
 
@@ -80,7 +86,9 @@ def fetch_mouvements(s: Session, view: Iterable, offset_size, offset=0, search_f
     df = pd.read_sql(stmt, s.connection())
 
     # Massaging the result
-    df.fillna(value=0, inplace=True)
+    df.fillna(
+        value={'Recette': 0, 'Dépense': 0, 'Taux remboursement': 0, 'Provision à payer': 0, 'Provision à récupérer': 0},
+        inplace=True)
     df['Solde'] = df['Recette'] - df['Dépense']
     df['Provision'] = df['Provision à récupérer'] - df['Provision à payer']
     if not view is None:
@@ -90,6 +98,7 @@ def fetch_mouvements(s: Session, view: Iterable, offset_size, offset=0, search_f
 
 
 def get_groups(s: Session) -> pd.DataFrame:
+    """ Returns a dataframe with two columns : patterns, and classes"""
     # Selection of the patterns
     metadata_obj = MetaData()
     classes = Table('classifiers', metadata_obj,
@@ -101,23 +110,37 @@ def get_groups(s: Session) -> pd.DataFrame:
     return df_classes
 
 
-def get_categorized_provisions(s: Session, category_filter: str, month: date, economy_mode: bool) -> pd.DataFrame:
-    """ This function calculates, for a given category, the total expenses and recipes, comparing between actual and forecast"""
+def get_categorized_provisions(s: Session, category_filter: str, month: date, number_months: int,
+                               economy_mode: bool) -> pd.DataFrame:
+    """ This function calculates, for a given category, the total expenses and recipes, comparing between actual and forecast
+
+    :returns: A dataframe with following columns :
+    - Group
+    - Mois (date)
+    - Provision à payer
+    - Dépense
+    - Provision à récupérer
+    - Recette
+    - Δ Dépense
+     - Δ Recette"""
+    end_month = month + relativedelta.relativedelta(months=number_months)
+    str_economy = 'true' if economy_mode else 'false'
     stmt = select(Mouvement.description, Mouvement.depense, Mouvement.provision_payer, Mouvement.recette,
-                  Mouvement.provision_recuperer).where(Mouvement.date_out_of_bound == False,
-                                                       Mouvement.categorie == category_filter, Mouvement.mois == month)
-    #                                                       Mouvement.economie == text('true') if economy_mode else text('false'))
+                  Mouvement.provision_recuperer, Mouvement.mois).where(Mouvement.date_out_of_bound == False,
+                                                       Mouvement.categorie == category_filter, Mouvement.mois >= month,
+                                                       Mouvement.mois < end_month,
+                                                       Mouvement.economie == str_economy)
 
     df_classes = get_groups(s)
 
     # reading the dataframe
-    df = pd.read_sql(stmt, s.connection())
+    df = pd.read_sql(stmt, s.connection(), parse_dates='Mois')
 
     # Classifying
     df['Group'] = df['Description'].apply(classify, classification_matrix=df_classes.values)
 
     # Grouping
-    df = df.drop('Description', axis=1).groupby(['Group'], as_index=False).sum()
+    df = df.drop(['Description', 'Mois'], axis=1).groupby(['Group', df['Mois'].dt.month], as_index=False).sum()
 
     # Calculating differences
     df['Δ Dépense'] = df['Provision à payer'] - df['Dépense']
@@ -245,26 +268,6 @@ def get_solde(s: Session, compte: str, period_begin: date, period_end: date) -> 
 
 def get_grouped_transactions(s: Session, compte_type: str, period_begin: date, period_end: date) -> pd.DataFrame:
     """ calculates the running saldo for all accounts"""
-    stmt = select(Compte.compte_type, Mouvement.compte, Mouvement.date, Mouvement.depense, Mouvement.recette).join(
-        Compte).where(
-        Mouvement.date_out_of_bound == False).where(Mouvement.date <= period_end).where(
-        Compte.compte_type == compte_type)
-    df = pd.read_sql(stmt, s.connection(), coerce_float=True, parse_dates='Date')
-    # fill the values with zero, else the calculation of the solde doesn't work properly
-    df = df.fillna(0)
-    df['Solde'] = df['Recette'] - df['Dépense']
-    df = df.groupby(['compte_type', 'Compte', 'Date'])[['Solde']].sum().sort_index()
-    df['Cumul'] = df.groupby(level='Compte')['Solde'].cumsum()
-    df = df.loc[df.index.get_level_values('Date') >= pd.to_datetime(period_begin)]
-    # rounding
-    df = df.round(2)
-
-    # End
-    return df[['Solde', 'Cumul']].sort_index(ascending=True)
-
-
-def get_grouped_transactions_2(s: Session, compte_type: str, period_begin: date, period_end: date) -> pd.DataFrame:
-    """ calculates the running saldo for all accounts"""
     # --- STEP 1 : calculates the starting saldos
     stmt = select(Mouvement.compte, Mouvement.depense, Mouvement.recette).join(
         Compte).where(
@@ -310,7 +313,7 @@ def get_grouped_transactions_2(s: Session, compte_type: str, period_begin: date,
 
     # aggregate
     df = df.groupby(['Compte', 'Date'])[['Dépense', 'Recette']].sum().fillna(0).round(2).sort_index()
-    df['Delta'] = df['Recette'] - df['Dépense']
+    df['Delta'] = pd.to_numeric(df['Recette'] - df['Dépense'])
     df['Cumul'] = df.groupby(level='Compte')['Delta'].cumsum()
     df = df.drop(columns=['Dépense', 'Recette', 'Delta'])
 
@@ -399,21 +402,19 @@ def close_provision(s: Session, mois: date, category: str, remaining: float):
     job = Job(job_key=Job.type_shut, job_timestamp=datetime.now())
     s.add(Mouvement(date=date.today(),
                     description='Automatic closing of provision',
+                    label_utilisateur=f'Fermeture provision pour catégorie {category}',
                     categorie=category,
                     mois=mois,
                     date_insertion=date.today(),
-                    provision_payer=-remaining,
+                    provision_payer=float(-remaining),
                     no=0,
                     job=job
                     ))
-    print(f'Mouvement créé. Committing...')
-    # end
-    s.flush()
-    s.commit()
 
 
-def create_salaries(e: Engine, parent_id: int, mois: dt.date, simulate: bool):
-    """ Créer des salaires pour un mois donné"""
+def create_salaries(s: Session, parent_id: int, mois: dt.date, simulate: bool):
+    """ Créer des salaires pour un mois donné
+    IMPORTANT : toujours convertir explicitement les floats !"""
     print(f'Attempting to generate salary for month : {mois}')
 
     # Constants
@@ -424,101 +425,103 @@ def create_salaries(e: Engine, parent_id: int, mois: dt.date, simulate: bool):
     categorie_note_de_frais = 'Notes De Frais'
     date_insertion = dt.date.today()
 
-    with Session(e) as session:
-        # Création du numéro de transaction
-        maxnumber = get_max_number(session) + 1
-        print(f'max number retrieved : {maxnumber}')
-        # retrieve salarial data
-        salaire_infos = get_salaries(session, mois)
-        print(f'infos salaires retrieved : {salaire_infos}')
-        # try to find the original salary
+    # Création du numéro de transaction
+    maxnumber = get_max_number(s) + 1
+    print(f'max number retrieved : {maxnumber}')
+    # retrieve salarial data
+    salaire_dataframe = get_salaries(s, mois)
+    print(f'infos salaires retrieved : {salaire_dataframe}')
+    # convert it to a dict
+    salaire_infos = {k: s[0] for k, s in salaire_dataframe.items()}
 
-        # salaire found. Do it.
-        salaire_transaction = session.get(Mouvement, parent_id)
-        date_salaire = salaire_transaction.date
-        print(f'salary transaction found : {salaire_transaction}')
+    # try to find the original salary
 
-        # Create the job
-        salaire_job = Job(job_key=Job.type_salary, job_mois=mois, job_timestamp=dt.datetime.now())
-        session.add(salaire_job)
-        print(f'Job created : {salaire_job}')
+    # salaire found. Do it.
+    salaire_transaction = s.get(Mouvement, parent_id)
+    date_salaire = salaire_transaction.date
+    print(f'salary transaction found : {salaire_transaction}')
 
-        # Create the transactions
-        to_insert = []
-        to_insert.append(Mouvement(description=f'Salaire net pour le mois {mois}',
-                                   recette=salaire_infos['salaire_net'],
-                                   depense=0,
+    # Create the job
+    salaire_job = Job(job_key=Job.type_salary, job_mois=mois, job_timestamp=dt.datetime.now())
+    s.add(salaire_job)
+    print(f'Job created : {salaire_job}')
+
+    # Create the transactions
+    to_insert = []
+    to_insert.append(Mouvement(description=f'Salaire net pour le mois {mois}',
+                               recette=float(salaire_infos['salaire_net']),
+                               depense=float(0),
+                               categorie=categorie_salaire,
+                               )
+                     )
+
+    to_insert.append(Mouvement(description=f'Impôt revenu sur le salaire du {mois}',
+                               recette=float(0),
+                               depense=float(-salaire_infos['impot_salaire']),
+                               categorie=categorie_impot,
+                               )
+                     )
+
+    to_insert.append(Mouvement(description=f'AIL net pour le mois {mois}',
+                               recette=float(salaire_infos['logement']),
+                               depense=float(0),
+                               categorie=categorie_ail,
+                               )
+                     )
+
+    if salaire_infos['autre'] > 0:
+        to_insert.append(Mouvement(description=f'Notes de frais pour le {mois}',
+                                   recette=float(salaire_infos['autre']),
+                                   depense=float(0),
+                                   categorie=categorie_note_de_frais,
+                                   )
+                         )
+
+    if salaire_infos['prime_net'] > 0:
+        to_insert.append(Mouvement(description=f'Prime nette pour le mois {mois}',
+                                   recette=float(salaire_infos['prime_net']),
+                                   depense=float(0),
                                    categorie=categorie_salaire,
+                                   economie='true',
                                    )
                          )
 
-        to_insert.append(Mouvement(description=f'Impôt revenu sur le salaire du {mois}',
-                                   recette=0,
-                                   depense=-salaire_infos['impot_salaire'],
+        to_insert.append(Mouvement(description=f'Impôt sur la prime pour le mois {mois}',
+                                   recette=float(0),
+                                   depense=float(-salaire_infos['impot_prime']),
                                    categorie=categorie_impot,
+                                   economie='true',
                                    )
                          )
+    # add the general metadata
+    for mvt in to_insert:
+        mvt.date = date_salaire
+        mvt.date_insertion = date_insertion
+        mvt.no = maxnumber
+        mvt.index_parent = parent_id
+        mvt.job = salaire_job
+        mvt.label_utilisateur = mvt.description
+        mvt.declarant = salaire_transaction.declarant
+        mvt.employeur = salaire_transaction.employeur
+        mvt.mois = mois
+        mvt.compte = compte
+        # appending to the session
+        s.add(mvt)
 
-        to_insert.append(Mouvement(description=f'AIL net pour le mois {mois}',
-                                   recette=salaire_infos['logement'],
-                                   depense=0,
-                                   categorie=categorie_ail,
-                                   )
-                         )
+    # modify the original salary
+    if salaire_transaction != None:
+        salaire_transaction.recette_initiale = salaire_transaction.recette
+        salaire_transaction.recette = 0
+        s.add(salaire_transaction)
+        print(f'Original transaction neutralized')
 
-        if salaire_infos['autre'] > 0:
-            to_insert.append(Mouvement(description=f'Notes de frais pour le {mois}',
-                                       recette=salaire_infos['autre'],
-                                       depense=0,
-                                       categorie=categorie_note_de_frais,
-                                       )
-                             )
-
-        if salaire_infos['prime_net'] > 0:
-            to_insert.append(Mouvement(description=f'Prime nette pour le mois {mois}',
-                                       recette=salaire_infos['prime_net'],
-                                       depense=0,
-                                       categorie=categorie_salaire,
-                                       economie='true',
-                                       )
-                             )
-
-            to_insert.append(Mouvement(description=f'Impôt sur la prime pour le mois {mois}',
-                                       recette=0,
-                                       depense=-salaire_infos['impot_prime'],
-                                       categorie=categorie_impot,
-                                       economie='true',
-                                       )
-                             )
-        # add the general metadata
-        for mvt in to_insert:
-            mvt.date = date_salaire
-            mvt.date_insertion = date_insertion
-            mvt.no = maxnumber
-            mvt.index_parent = parent_id
-            mvt.job = salaire_job
-            mvt.label_utilisateur = mvt.description
-            mvt.declarant = salaire_transaction.declarant
-            mvt.employeur = salaire_transaction.employeur
-            mvt.mois = mois
-            mvt.compte = compte
-            # appending to the session
-            session.add(mvt)
-
-        # modify the original salary
-        if salaire_transaction != None:
-            salaire_transaction.recette_initiale = salaire_transaction.recette
-            salaire_transaction.recette = 0
-            session.add(salaire_transaction)
-            print(f'Original transaction neutralized')
-
-        # Closing the session and committing
-        session.flush()
-        if not simulate:
-            session.commit()
-            print(f'Salary import done')
-        else:
-            print(f'No import, just simulating')
+    # Closing the session and committing
+    s.flush()
+    if not simulate:
+        s.commit()
+        print(f'Salary import done')
+    else:
+        print(f'No import, just simulating')
 
 
 def save_capital_reimbursements(e: Engine, reimbursement_scheme: pd.Series, target_account: str, target_category: str,
@@ -572,7 +575,15 @@ def save_capital_reimbursements(e: Engine, reimbursement_scheme: pd.Series, targ
         session.commit()
 
 
-def get_provisions_for_month(e: Engine, month: date, is_courant: bool = True) -> pd.DataFrame:
+def get_history_of_provisions(is_depense: bool):
+    """ Cette fonction crée un dataframe avec
+    12 lignes : 1 par mois
+    une colonne : dépense ou recette de l'année précédente, pour la catégorie et le pattern sélectionné
+    une colonne : dépense ou recette de l'année en cours, pour la catégorie et le pattern sélectionné
+    une colonne : provision pour l'année" en cours, pour la catégorie et le pattern sélectionné """
+
+
+def get_provisions_for_month(s: Session, month: date, is_courant: bool = True) -> pd.DataFrame:
     """ Returns all the aggregated provisions for a specific month
 
     :returns:a Dataframe with the necessary columns"""
@@ -595,7 +606,10 @@ def get_provisions_for_month(e: Engine, month: date, is_courant: bool = True) ->
                        Column('Dépense Economisée', Numeric),
                        Column('Dépense Economisée Provisionnée', Numeric),
                        Column('Dépense Economisée Provisionnée restante', Numeric),
-
+                       Column('Solde Courant + Provision', Numeric),
+                       Column('Solde Courant', Numeric),
+                       Column('Solde Total', Numeric),
+                       Column('Solde Total + Provision', Numeric),
                        schema='dbview_schema')
 
     if not is_courant:
@@ -603,19 +617,23 @@ def get_provisions_for_month(e: Engine, month: date, is_courant: bool = True) ->
                       provisions.c['Recette Economisée Provisionnée'],
                       provisions.c['Recette Economisée Provisionnée restante'],
                       provisions.c['Dépense Economisée'], provisions.c['Dépense Economisée Provisionnée'],
-                      provisions.c['Dépense Economisée Provisionnée restante'])
+                      provisions.c['Dépense Economisée Provisionnée restante'],
+                      provisions.c['Solde Total'],
+                      provisions.c['Solde Total + Provision'])
     else:
         stmt = select(provisions.c['Catégorie Groupe'], provisions.c['Catégorie'], provisions.c['Recette Courante'],
                       provisions.c['Recette Courante Provisionnée'],
                       provisions.c['Recette Courante Provisionnée restante'],
                       provisions.c['Dépense Courante'], provisions.c['Dépense Courante Provisionnée'],
-                      provisions.c['Dépense Courante Provisionnée non épuisée'])
+                      provisions.c['Dépense Courante Provisionnée non épuisée'],
+                      provisions.c['Solde Courant'],
+                      provisions.c['Solde Courant + Provision'])
 
     stmt = stmt.where(
         provisions.c['Mois'] == month).order_by(
         provisions.c['Catégorie Groupe'], provisions.c['Catégorie'])
 
-    result = pd.read_sql(stmt, e, coerce_float=True, parse_dates=('Mois'))
+    result = pd.read_sql(stmt, s.connection(), coerce_float=True, parse_dates=('Mois'))
 
     if not is_courant:
         result.rename(inplace=True, columns={'Recette Economisée': 'Recette',
@@ -623,14 +641,19 @@ def get_provisions_for_month(e: Engine, month: date, is_courant: bool = True) ->
                                              'Recette Economisée Provisionnée restante': 'Recette Reste',
                                              'Dépense Economisée': 'Dépense',
                                              'Dépense Economisée Provisionnée': 'Dépense Provisionnée',
-                                             'Dépense Economisée Provisionnée restante': 'Dépense Reste'})
+                                             'Dépense Economisée Provisionnée restante': 'Dépense Reste',
+                                             'Solde Total': 'Solde sans provisions',
+                                             'Solde Total + Provision': 'Solde avec provisions'})
     else:
         result.rename(inplace=True, columns={'Recette Courante': 'Recette',
                                              'Recette Courante Provisionnée': 'Recette Provisionnée',
                                              'Recette Courante Provisionnée restante': 'Recette Reste',
                                              'Dépense Courante': 'Dépense',
                                              'Dépense Courante Provisionnée': 'Dépense Provisionnée',
-                                             'Dépense Courante Provisionnée non épuisée': 'Dépense Reste'})
+                                             'Dépense Courante Provisionnée non épuisée': 'Dépense Reste',
+                                             'Solde Courant': 'Solde sans provisions',
+                                             'Solde Courant + Provision': 'Solde avec provisions'}
+                      )
 
     return result
 
@@ -683,6 +706,8 @@ def apply_mass_update(session: Session, indexes: list[int], template: Mouvement)
                 mvt.description = template.description
             if not template.categorie is None:
                 mvt.categorie = template.categorie
+            if not template.compte is None:
+                mvt.compte = template.compte
             if not template.mois is None:
                 mvt.mois = template.mois
 
@@ -920,12 +945,11 @@ def calculate_labels(e: Engine, indexes: []) -> int:
     return affected_records
 
 
-def find_salary_transaction(e: Engine, mois: date, amount: float) -> Mouvement:
+def find_salary_transaction(s: Session, mois: date, amount: float) -> Mouvement:
     """ Searches for a transaction with corresponding amount"""
-    with Session(e) as session:
-        stmt = select(Mouvement).where(Mouvement.date >= mois - timedelta(days=7),
-                                       or_(Mouvement.recette == amount, Mouvement.recette_initiale == amount))
-        mvt = session.scalar(stmt)
+    stmt = select(Mouvement).where(Mouvement.date >= mois - timedelta(days=7),
+                                   or_(Mouvement.recette == amount, Mouvement.recette_initiale == amount))
+    mvt = s.scalar(stmt)
 
     return mvt
 
@@ -998,6 +1022,12 @@ def identify_gaps(s: Session, value: MapCategorie):
     df = pd.read_sql(stmt, s.connection())
     return df
 
+def spread_over_year(values_df: pd.DataFrame, colonne_pivot: str) -> pd.DataFrame:
+    """ Merges with a series of twelve months"""
+    months = pd.DataFrame(data=[[i + 1] for i in range(12)], columns=[colonne_pivot])
+    exploded = months.merge(values_df, how='left')
+    return exploded.fillna(0)
+
 
 class JobMapper:
     def __init__(self):
@@ -1030,3 +1060,5 @@ def split_value(value: float, no_periods: int, rounding: int) -> Iterable:
     quotient = sum(result)
     result += [round(value - quotient, rounding)]
     return result
+
+

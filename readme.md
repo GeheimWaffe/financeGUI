@@ -1,14 +1,16 @@
 # CLI & GUI de gestion de finances 
 
-Quelques fonctionnalités supportées
-1 Voir les comptes existants
-2 Créer un nouveau compte
-3 Supprimer un compte
+## Installation et configuration
 
-## Voir les comptes existants
+*Pour générer les requirements*
+Dans la console, taper : 
+pip freeze > requirements.txt
+
+## Fonctionnalités supportées
+### Voir les comptes existants
 L'application me liste tous les comptes, en les triant par type de compte
 
-## Créer un nouveau compte
+### Créer un nouveau compte
 Quel type de compte voulez-vous créer ? 
 1 Compte Courant
 2 Compte Epargne
@@ -18,7 +20,3 @@ Quel est le nom du compte ?
 ...
 
 insertion du compte dans la base de données : ok.
-
-## Supprimer un compte
-Quel compte voulez-vous supprimer ? 
-crédit agricole

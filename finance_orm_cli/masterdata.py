@@ -214,6 +214,7 @@ def shutdown_category():
 
         # we close the provision
         close_provision(session, mois, cat, remain)
+        session.commit()
 
 
 def get_last_salary_months() -> list:

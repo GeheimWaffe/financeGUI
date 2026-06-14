@@ -19,13 +19,35 @@ from engines import makesession
 
 # Colonnes à voir dans le formulaire
 view_columns = ["index", "Label utilisateur",
-                "Catégorie", "Date", "Mois", "Solde", "Numéro de référence"]
+                "Catégorie", "Compte", "Date", "Mois", "Solde", "Numéro de référence", "Taux remboursement"]
 
 # ELEMENTS DU SESSION STATE
 st_categorie = 'new_categorie'
 st_compte = 'new_compte'
 st_mois = 'new_mois'
 st_ref = 'new_ref'
+st_filters = 'filters'
+st_label_filter = 'main_widget_label'
+st_empty_transactions = 'main_widget_empty'
+st_categorie_filter = 'main_widget_categorie'
+st_compte_filter = 'main_widget_compte'
+st_ref_filter = 'main_widget_ref'
+st_job_filter = 'main_widget_job'
+st_reimbursable_filter = 'main_widget_reimbursable'
+st_affectable_filter = 'main_widget_affectable'
+st_economy_filter = 'main_widget_economy'
+st_deactivated_filter = 'main_widget_deactivated'
+
+
+def cb_set_filter(filter_name: str, widget_key: str):
+    st.toast(f"setting '{filter_name}' filter !")
+    st.session_state.global_filters[filter_name] = st.session_state[widget_key]
+
+
+def color_sur_valeur(val):
+    color = 'red' if val < 0 else 'green'
+    return f'color: {color}'
+
 
 def cb_new_transaction():
     st.session_state.page = 'New Transaction'
@@ -35,11 +57,14 @@ def cb_edit_transaction():
     if not st.session_state.index_mouvement is None:
         st.session_state.page = 'Edit Transaction'
 
+
 def cb_new_keyword():
     st.session_state.page = 'Maps'
 
+
 def cb_link():
     st.session_state.page = 'Link'
+
 
 def cb_invert_transaction():
     if not st.session_state.index_mouvement is None:
@@ -90,6 +115,18 @@ def show_main_form():
         st.session_state.offset_size = 20
     if 'last_event' not in st.session_state:
         st.session_state.last_event = 'Idle'
+#    if st_label_filter not in st.session_state:
+    st.session_state[st_label_filter] = st.session_state.global_filters['label_filter']
+    st.session_state[st_empty_transactions] = st.session_state.global_filters['empty_transactions']
+    st.session_state[st_categorie_filter] = st.session_state.global_filters['category']
+    st.session_state[st_compte_filter] = st.session_state.global_filters['compte']
+    st.session_state[st_ref_filter] = st.session_state.global_filters['reference']
+    st.session_state[st_job_filter] = st.session_state.global_filters['job']
+    st.session_state[st_reimbursable_filter] = st.session_state.global_filters['reimbursable']
+    st.session_state[st_affectable_filter] = st.session_state.global_filters['affectable']
+    st.session_state[st_economy_filter] = st.session_state.global_filters['is_courant']
+    st.session_state[st_deactivated_filter] = st.session_state.global_filters['deactivated']
+
 
     # Type de comptes
     with makesession() as s:
@@ -109,27 +146,38 @@ def show_main_form():
     # --- PAGE : Main ---
     st.subheader("Mes transactions financières")
     # --- BARRE DE RECHERCHE
-    search_term = st.text_input("🔍", placeholder="Rechercher une transaction...", label_visibility='hidden')
+    search_term = st.text_input("🔍", placeholder="Rechercher une transaction...", label_visibility='hidden', key=st_label_filter,
+                                on_change=cb_set_filter, args=('label_filter', st_label_filter))
+    empty_cats = st.toggle("Transactions non-catégorisées", value=False, key=st_empty_transactions,
+                           on_change=cb_set_filter, args=('empty_transactions', st_empty_transactions))
 
     # --- ZONE DE FILTRES ---
     with st.expander("🔍 Autres Filtres et Recherche", expanded=False):
         f_col1, f_col2, f_col3, f_col4 = st.columns([2, 2, 2, 3])
 
         with f_col1:
-            cat_filter = st.selectbox("Catégorie", cat_list, index=None)
-            reimb = st.checkbox("Reimbursable Expenses")
+            cat_filter = st.selectbox("Catégorie", cat_list, index=None, key=st_categorie_filter,
+                                      on_change=cb_set_filter, args=('category', st_categorie_filter))
+            reimb = st.checkbox("Reimbursable Expenses", key=st_reimbursable_filter, on_change=cb_set_filter,
+                                args=('reimbursable', st_reimbursable_filter))
+            date_from = st.date_input("Date", value=None)
 
         with f_col2:
-            compte_filter = st.selectbox("Compte", compte_list, index=None)
+            compte_filter = st.selectbox("Compte", compte_list, index=None, key=st_compte_filter,
+                                         on_change=cb_set_filter, args=('compte', st_compte_filter))
             affect = st.checkbox("Affectable Payments")
 
         with f_col3:
-            tag_filter = st.selectbox("Réf.", st.session_state.nos_ref, index=None)
-            economy = st.toggle("Economy Mode", value=False)
+            tag_filter = st.selectbox("Réf.", st.session_state.nos_ref, index=None, key=st_ref_filter,
+                                      on_change=cb_set_filter, args=('reference', st_ref_filter))
+            economy = st.toggle("Economy Mode", value=False, key=st_economy_filter,
+                                on_change=cb_set_filter, args=('is_courant', st_economy_filter))
 
         with f_col4:
-            job_filter = st.selectbox("Job", jobmapper.get_job_descriptions(), index=None)
-            deactivated = st.toggle("Deactivated Transactions", value=False)
+            job_filter = st.selectbox("Job", jobmapper.get_job_descriptions(), index=None, key=st_job_filter,
+                                      on_change=cb_set_filter, args=('job', st_job_filter))
+            deactivated = st.toggle("Deactivated Transactions", value=False, key=st_deactivated_filter,
+                                    on_change=cb_set_filter, args=('deactivated', st_deactivated_filter))
 
     # --- ZONE DE BILANS ---
     with st.expander("Soldes", expanded=False):
@@ -141,7 +189,7 @@ def show_main_form():
                 soldes = fetch_soldes(s, selected_type)
 
             st.dataframe(data=soldes, hide_index=True,
-                             column_config={"Solde Compte Actuel": st.column_config.NumberColumn(format="%.2f €")})
+                         column_config={"Solde Compte Actuel": st.column_config.NumberColumn(format="%.2f €")})
         with col_balance:
             st.text('Balances')
             st.space()
@@ -149,7 +197,6 @@ def show_main_form():
                 balances = get_balances(s, date.today() - timedelta(weeks=12))
 
             st.dataframe(data=balances, hide_index=True)
-
 
     st.divider()
 
@@ -183,22 +230,26 @@ def show_main_form():
 
         # Création du dataframe
         # FILTRES - récupération
-
         with mouvements_container:
             with makesession() as s:
                 df_data = fetch_mouvements(s, view_columns, st.session_state.offset_size, st.session_state.offset,
-                                           sort_column='index', sort_order='desc', category_filter=cat_filter,
+                                           sort_column='index', sort_order='desc',
+                                           category_filter='' if empty_cats else cat_filter,
                                            compte_filter=compte_filter, tag_filter=tag_filter,
                                            search_filter=search_term, reimbursable=reimb,
                                            affectable=affect, economy_mode=economy,
-                                           job_id=jobmapper.get_job_id(job_filter))
+                                           job_id=jobmapper.get_job_id(job_filter), specific_date=date_from)
 
+            # Couleur
             mvt_table = st.dataframe(
-                df_data,
+                df_data.style.map(color_sur_valeur, subset=['Solde']),
                 width='stretch',
                 height='content',
                 hide_index=True,
-                column_config={"Solde": st.column_config.NumberColumn(format="%.2f €")},
+                column_config={"Solde": st.column_config.NumberColumn(format="%.2f €"),
+                               "Taux remboursement": st.column_config.ProgressColumn(
+                                   help="Proximité du remboursement total", min_value=0, max_value=1,
+                                   format="percent")},
                 key="main_table",
                 on_select="rerun",
                 selection_mode="multi-row"
@@ -216,8 +267,8 @@ def show_main_form():
         if len(selected_rows) > 0:
             # On récupère les identifiants uniques (PK) des lignes sélectionnées
             # Supposons que votre PK est 'id' ou 'description'
-            pks_to_update = [int(df_data.iloc[i][0]) for i in selected_rows]
-            labels = [df_data.iloc[i][1] for i in selected_rows]
+            pks_to_update = [int(df_data.iloc[i]['index']) for i in selected_rows]
+            labels = [df_data.iloc[i]['Label utilisateur'] for i in selected_rows]
 
             # On fixe l'identifiant de la transaction à adapter
             st.session_state.index_mouvement = int(pks_to_update[0])
@@ -237,7 +288,7 @@ def show_main_form():
             st.selectbox("Nouvelle Catégorie", cat_list, key=st_categorie, index=None)
             st.selectbox("Nouveau Compte", compte_list, key=st_compte, index=None)
             st.date_input("Nouveau Mois", key=st_mois)
-            st.selectbox("Nouvelle Ref.", key=st_ref, options=st.session_state.nos_ref)
+            st.selectbox("Nouvelle Ref.", key=st_ref, options=st.session_state.nos_ref, index=None)
 
             st.button("Mettre à jour", type="primary", on_click=cb_mass_update, args=(pks_to_update,))
 

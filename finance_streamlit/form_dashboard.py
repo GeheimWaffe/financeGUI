@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta
 from engines import makesession
-from functions import get_type_comptes, get_grouped_transactions, get_grouped_transactions_2
+from functions import get_type_comptes, get_grouped_transactions, get_grouped_transactions
 
 
 def show_dashboard():
@@ -33,7 +33,7 @@ def show_dashboard():
     # --- 2. RÉCUPÉRATION DES DONNÉES ---
     # On appelle ta fonction de regroupement
     with makesession() as s:
-        df = get_grouped_transactions_2(s, selected_type, start_date, end_date)
+        df = get_grouped_transactions(s, selected_type, start_date, end_date)
 
     if df.empty:
         st.warning("Aucune donnée trouvée pour cette période.")

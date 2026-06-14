@@ -44,6 +44,9 @@ def manage_links():
         editable = get_transaction(s, index_mouvement)
         df_events = get_events(s, editable.categorie)
 
+    st.badge(f"Description : {editable.description}")
+    st.badge(f"Label utilisateur : {editable.label_utilisateur}")
+
     # --- 2. LOGIQUE DE CALCUL DU REMBOURSEMENT (DÉPENSES) ---
     is_expense = editable.depense is not None and editable.depense > 0
 
@@ -67,17 +70,28 @@ def manage_links():
                 st.metric("Remboursement attendu", f"{new_provision} €")
 
     # --- 3. FORMULAIRE DE SAISIE ---
-    col_d1, col_d2 = st.columns(2)
+    col_d1, col_d2, col_d3 = st.columns(3)
 
     with col_d1:
-        # Date d'événement
-        current_dt = editable.date_remboursement or date.today()
-        selected_date = st.date_input("Date d'événement", value=current_dt)
+        # Picker
+        events = st.selectbox("Event Selector", options=df_events['Label utilisateur'].values.tolist(), index=None)
+        if events:
+            row_idx = df_events['Label utilisateur'].values.tolist().index(events)
+            proposed_date = df_events.iloc[row_idx, 0]
+            proposed_label = df_events.iloc[row_idx, 1]
+        else:
+            proposed_label = None
+            proposed_date = None
 
     with col_d2:
         # Libellé utilisateur
-        current_label = editable.label_utilisateur or ""
+        current_label = proposed_label or editable.label_utilisateur
         selected_label = st.text_input("Libellé personnalisé", value=current_label)
+
+    with col_d3:
+        # Date d'événement
+        current_dt = proposed_date or editable.date_remboursement
+        selected_date = st.date_input("Date d'événement", value=current_dt)
 
     st.divider()
 
@@ -90,18 +104,8 @@ def manage_links():
         width='stretch',
         hide_index=False,
         on_select="rerun",
-        selection_mode="single-row",
-        height='content'  # Ajusté pour voir plus de lignes
+        selection_mode="single-row"
     )
-
-    # Logique de mise à jour automatique si une ligne est cliquée
-    selected_rows = event_selection.get("selection", {}).get("rows", [])
-    if selected_rows:
-        row_idx = selected_rows[0]
-        # On injecte les valeurs de la ligne dans les variables (équivalent du CLICKED)
-        selected_date = df_events.iloc[row_idx, 0]
-        selected_label = df_events.iloc[row_idx, 1]
-        st.success(f"Événement sélectionné : {selected_label}")
 
     # --- 5. ACTIONS (VALIDER / ANNULER) ---
     st.divider()

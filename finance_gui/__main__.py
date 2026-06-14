@@ -373,7 +373,7 @@ def form_update_transaction(editable: Mouvement, numeros_reference: list) -> Mou
 def form_update_provision(offset_size: int, categorie: str, mois: datetime.date, economy_mode: bool = False):
     # Retrieve the provisions
     with makesession() as s:
-        df_groups = get_categorized_provisions(s, category_filter=categorie, month=mois,
+        df_groups = get_categorized_provisions(s, category_filter=categorie, month=mois, number_months=1,
                                                economy_mode=economy_mode)
         df_groups.sort_values('Group', inplace=True)
         df = fetch_mouvements(s, view=None, offset_size=offset_size, category_filter=categorie, month_filter=mois,
@@ -490,7 +490,7 @@ def form_update_provision(offset_size: int, categorie: str, mois: datetime.date,
         if update_values:
             with makesession() as s:
                 patterns = get_groups(s)
-                df_groups = get_categorized_provisions(s, category_filter=categorie, month=mois,
+                df_groups = get_categorized_provisions(s, category_filter=categorie, month=mois, number_months=1,
                                                        economy_mode=economy_mode)
                 df_groups.sort_values('Group', inplace=True)
 
@@ -778,7 +778,8 @@ def form_manage_salaries() -> bool:
                 selected_month = df.iloc[row, 0]
                 amount = df.iloc[row, 7]
                 # searches for a transaction
-                salary = find_salary_transaction(engine, selected_month, amount)
+                with makesession() as s:
+                    salary = find_salary_transaction(s, selected_month, amount)
                 # Alternatives
                 if salary is None:
                     status_message = "No salary transaction found, import impossible"
@@ -1023,7 +1024,8 @@ def form_manage_monthly_provisions():
     # Variables d'état
     current_month: datetime.date = datetime.date.today() - datetime.timedelta(days=datetime.date.today().day - 1)
     is_courant = True
-    df = get_provisions_for_month(engine, current_month, is_courant=is_courant)
+    with makesession() as session:
+        df = get_provisions_for_month(session, current_month, is_courant=is_courant)
 
     # Layout
     layout = [
@@ -1103,6 +1105,7 @@ def form_manage_monthly_provisions():
                 if remaining > 0:
                     with Session(engine) as session:
                         close_provision(session, current_month, category=category, remaining=remaining)
+                        session.commit()
                     status_message = f"Category closed, remaining : {remaining} was solded"
                     update_values = True
                 else:
@@ -1123,7 +1126,8 @@ def form_manage_monthly_provisions():
         # Conditional update
         window['-STATUS-BAR-'].update(status_message)
         if update_values:
-            df = get_provisions_for_month(engine, current_month, is_courant)
+            with makesession() as s:
+                df = get_provisions_for_month(s, current_month, is_courant)
             window["-DATE-"].update(current_month.strftime("%Y-%m-%d"))
             window['-PROVISIONS-'].update(df.values.tolist())
             window['-DEPENSE-'].update(f"Dépense : {round(df['Dépense'].sum(), 0)}")
@@ -1169,6 +1173,7 @@ def form_manage_remaining_provisions():
             remaining = float(row[2])
             # close the provision
             close_provision(session, mois, category, remaining)
+            session.commit()
             update_values = True
             # window['-STATUS-BAR-'].update(f"Provision closed for {mois} and {category}")
 

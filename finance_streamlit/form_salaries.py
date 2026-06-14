@@ -20,9 +20,13 @@ def manage_salaries(session:Session) -> bool:
     event = st.dataframe(
         df,
         use_container_width=True,
-        hide_index=False,
+        hide_index=True,
         on_select="rerun",
-        selection_mode="single_row"
+        selection_mode="single-row",
+        column_config={"mois": st.column_config.DateColumn("Mois"),
+                       "salaire_net": st.column_config.NumberColumn("Salaire net", format="%.2f €"),
+                       "prime_net": st.column_config.NumberColumn("Prime nette", format="%.2f €"),
+                       "impot_salaire": st.column_config.NumberColumn("Impôt sur Salaire", format="%.2f €")}
     )
 
     # 3. Logique de détection de sélection (Équivalent de ton event loop)
@@ -35,7 +39,7 @@ def manage_salaries(session:Session) -> bool:
         amount = df.iloc[row_idx, 7]
 
         # Recherche de la transaction via SQLAlchemy
-        salary = find_salary_transaction(session, selected_month, amount)
+        salary = find_salary_transaction(session, selected_month, float(amount))
         st.session_state.selected_salary_obj = salary
         st.session_state.current_month = selected_month
 
@@ -57,7 +61,7 @@ def manage_salaries(session:Session) -> bool:
     with col1:
         if st.button("Simulate", disabled=(salary is None), use_container_width=True):
             if salary.recette_initiale is None:
-                create_salaries(engine, salary.index, selected_month, True)
+                create_salaries(session, salary.index, selected_month, True)
                 st.toast("Simulation effectuée", icon="🧪")
             else:
                 st.warning("Import déjà fait")
@@ -65,7 +69,7 @@ def manage_salaries(session:Session) -> bool:
     with col2:
         if st.button("Import Selected", type="primary", disabled=(salary is None), use_container_width=True):
             if salary.recette_initiale is None:
-                create_salaries(engine, salary.index, selected_month, False)
+                create_salaries(session, salary.index, selected_month, False)
                 st.success("Import réussi !")
                 return True  # to_update = True
             else:

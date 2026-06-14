@@ -2,7 +2,9 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import select
 from datamodel import MapCategorie
-from functions import find_active_maps, fetch_mouvements
+from functions import find_active_maps, fetch_mouvements, get_categories
+from common import DatabaseOperation
+from datetime import datetime
 
 
 def manage_maps(session):
@@ -15,7 +17,7 @@ def manage_maps(session):
     if 'label_mouvement' in st.session_state:
         selected_label = st.session_state.label_mouvement
     else:
-        selected_label = None
+        selected_label = ''
 
     c1, c2, c3 = st.columns([6, 2, 1])
     with c1:
@@ -29,12 +31,18 @@ def manage_maps(session):
     # 1. Chargement des données
     if sort_order == 'keyword':
         df_current = pd.read_sql(
-            select(MapCategorie).where(MapCategorie.inactif != actif).where(MapCategorie.keyword.contains(search_term)).order_by(MapCategorie.keyword),
+            select(MapCategorie).where(MapCategorie.inactif != actif).where(
+                MapCategorie.keyword.contains(search_term)).order_by(MapCategorie.keyword),
             session.connection())
     else:
         df_current = pd.read_sql(
-            select(MapCategorie).where(MapCategorie.inactif != actif).where(MapCategorie.keyword.contains(search_term)).order_by(MapCategorie.categorie),
+            select(MapCategorie).where(MapCategorie.inactif != actif).where(
+                MapCategorie.keyword.contains(search_term)).order_by(MapCategorie.categorie),
             session.connection())
+
+    # Catégories
+    categories = get_categories(session)
+    cat_list = [c.categorie for c in categories]
 
     # 2. L'éditeur de données
     # On bloque la modification de 'compte' et 'compte_minuscule' pour les lignes existantes
@@ -49,9 +57,10 @@ def manage_maps(session):
                 "Mot-Clé (Clé)",
                 required=True,
             ),
-            MapCategorie.categorie.name: st.column_config.TextColumn(
+            MapCategorie.categorie.name: st.column_config.SelectboxColumn(
                 "Catégorie",
                 required=True,
+                options=cat_list
             ),
             MapCategorie.declarant.name: st.column_config.TextColumn(
                 "Déclarant"
@@ -89,8 +98,9 @@ def manage_maps(session):
             # --- AJOUTS (Ici on récupère bien le minuscule saisi) ---
             added = state.get("added_rows", [])
             if len(added) > 0:
-                st.session_state.log += [f"🔍 {len(state.get('added_rows', []))} nouvelles lignes créées. Analyse... "
-                                         f""]
+                st.session_state.log += [DatabaseOperation(operation_time=datetime.now(),
+                                                           operation_description=f"🔍 {len(state.get('added_rows', []))} nouvelles lignes créées. Analyse... ",
+                                                           success=True)]
             for row in added:
                 nouvel_obj = MapCategorie(
                     keyword=row.get(MapCategorie.keyword.name),
@@ -105,14 +115,21 @@ def manage_maps(session):
                 conflicting_maps = find_active_maps(session, nouvel_obj.keyword)
                 if len(conflicting_maps) == 0:
                     session.add(nouvel_obj)
-                    st.session_state.log += [f"Map Categorie créée : {nouvel_obj}"]
+                    st.session_state.log += [DatabaseOperation(operation_time=datetime.now(),
+                                                               operation_description=f"Map Categorie créée : {nouvel_obj}",
+                                                               success=True)]
                 else:
-                    st.session_state.log += [f"the map {nouvel_obj} is in conflict with {len(conflicting_maps)} other maps"]
+                    st.session_state.log += [DatabaseOperation(operation_time=datetime.now(),
+                                                               operation_description=f"the map {nouvel_obj} is in conflict with {len(conflicting_maps)} other maps",
+                                                               success=False)]
 
             # --- MODIFICATIONS (Seuls le groupe et l'ordre seront mis à jour) ---
             updated = state.get("edited_rows", {})
             if len(updated) > 0:
-                st.session_state.log += [f"🔍{len(state.get('edited_rows', []))} lignes mises à jour. Analyse..."]
+                st.session_state.log += [DatabaseOperation(operation_time=datetime.now(),
+                                                           operation_description=f"🔍{len(state.get('edited_rows', []))} lignes mises à jour. Analyse...",
+                                                           success=True)
+                                         ]
             for index_pos, updates in state.get("edited_rows", {}).items():
                 nom_pk = df_current.iloc[index_pos][MapCategorie.keyword.name]
                 obj: MapCategorie = session.get(MapCategorie, nom_pk)
@@ -148,10 +165,17 @@ def manage_maps(session):
                             obj.employeur = updates[MapCategorie.employeur.name]
                         if MapCategorie.inactif.name in updates:
                             obj.inactif = updates[MapCategorie.inactif.name]
-                        st.session_state.log += [f"Map '{obj}' updated"]
+                        st.session_state.log += [DatabaseOperation(operation_time=datetime.now(),
+                                              operation_description=f"Map '{obj}' updated",
+                                              success=True)]
                     else:
-                        st.session_state.log += [f"The map {nom_pk} is conflicting with others. maps found : {', '.join([k.keyword for k in conflicting_maps])}"]
-            session.commit()
+                        st.session_state.log += [
+                            DatabaseOperation(operation_time=datetime.now(),
+                                              operation_description=f"The map {nom_pk} is conflicting with others. maps found : {', '.join([k.keyword for k in conflicting_maps])}",
+                                              success=False)]
+
+            if not st.session_state.test_mode:
+                session.commit()
             st.rerun()
 
         except Exception as e:
@@ -159,10 +183,11 @@ def manage_maps(session):
             st.error(f"Erreur : {e}")
 
     if st.button("Test the map", type='secondary'):
-        mvts = fetch_mouvements(session, view=['index', 'Description', 'Catégorie', 'Solde', 'Date', 'Mois'], offset_size=20, offset=0, search_filter=search_term, sort_column='Date', sort_order='desc')
+        mvts = fetch_mouvements(session, view=['index', 'Description', 'Catégorie', 'Solde', 'Date', 'Mois'],
+                                offset_size=20, offset=0, search_filter=search_term, sort_column='Date',
+                                sort_order='desc')
         mvts = mvts.loc[mvts['Solde'] != 0]
         if len(mvts) > 0:
             st.dataframe(mvts, width='stretch', hide_index=True)
         else:
             st.error("Pas de mouvements trouvés pour ce filtre")
-

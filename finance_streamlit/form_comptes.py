@@ -25,12 +25,10 @@ def manage_comptes(session):
             "compte": st.column_config.TextColumn(
                 "Nom du Compte (Clé)",
                 required=True,
-                disabled=True  # Désactivé pour l'édition des lignes existantes
             ),
             "compte_minuscule": st.column_config.TextColumn(
                 "Nom Minuscule",
                 required=True,
-                disabled=True  # Désactivé pour l'édition des lignes existantes
             ),
             "compte_type": st.column_config.SelectboxColumn(
                 "Type",
@@ -40,9 +38,6 @@ def manage_comptes(session):
             "compte_actif": st.column_config.CheckboxColumn("Actif", default=True)
         }
     )
-
-    # Note technique : Streamlit permet TOUJOURS de saisir les colonnes 'disabled'
-    # pour les NOUVELLES lignes (added_rows), mais les bloque pour les lignes existantes.
 
     # 3. Logique de sauvegarde
     if st.button("Enregistrer les modifications", type="primary"):

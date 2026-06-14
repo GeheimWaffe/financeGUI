@@ -55,7 +55,7 @@ class TestORM(TestCase):
         print(df)
 
     def test_get_categorized_provisions(self):
-        df = get_categorized_provisions(self.eng, category_filter='Téléphone', month=date(2025, 3, 1), economy_mode=False)
+        df = get_categorized_provisions(self.session, category_filter='Téléphone', month=date(2025, 3, 1), number_months=1, economy_mode=False)
 
         self.assertGreater(len(df), 0, 'No categorized provisions found')
 

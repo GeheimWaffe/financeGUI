@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import select
 from datamodel import Categorie
+from functions import fetch_mouvements
+
 
 def manage_categories(session):
     st.title("🗂️ Configuration des Catégories")
@@ -26,7 +28,6 @@ def manage_categories(session):
             Categorie.categorie.name: st.column_config.TextColumn(
                 "Nom de la catégorie (Clé)",
                 required=True,
-                disabled=True  # Désactivé pour l'édition des lignes existantes
             ),
             Categorie.categorie_groupe.name:st.column_config.TextColumn(
                 "Groupe",
@@ -43,10 +44,6 @@ def manage_categories(session):
             )
         }
     )
-
-    # Note technique : Streamlit permet TOUJOURS de saisir les colonnes 'disabled'
-    # pour les NOUVELLES lignes (added_rows), mais les bloque pour les lignes existantes.
-
     # 3. Logique de sauvegarde
     if st.button("Enregistrer les modifications", type="primary"):
         state = st.session_state.editor_categories
@@ -90,3 +87,15 @@ def manage_categories(session):
         except Exception as e:
             session.rollback()
             st.error(f"Erreur : {e}")
+
+    # --- CHECK IF CATEGORY HAS TRANSACTIONS
+    category = st.selectbox("Test a category", options=df_current[Categorie.categorie.name].tolist(), index=None)
+    if category:
+        mvts = fetch_mouvements(session, view=['index', 'Description', 'Catégorie', 'Solde', 'Date', 'Mois'],
+                                offset_size=20, offset=0, category_filter=category,sort_column='Date',
+                                sort_order='desc')
+        if len(mvts) > 0:
+            st.dataframe(mvts, width='stretch', hide_index=True)
+        else:
+            st.error("Pas de mouvements trouvés pour ce filtre")
+
