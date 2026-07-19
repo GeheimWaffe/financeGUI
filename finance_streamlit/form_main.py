@@ -4,6 +4,7 @@ import os
 from datetime import date, timedelta
 
 from datamodel import Mouvement
+from finance_streamlit.common import cb_set_filter
 from functions import fetch_mouvements, fetch_soldes, get_type_comptes, get_categories, get_comptes, \
     get_numeros_reference, get_jobs, JobMapper, deactivate_transactions, get_transaction, import_transaction, \
     apply_mass_update, get_balances
@@ -37,11 +38,6 @@ st_reimbursable_filter = 'main_widget_reimbursable'
 st_affectable_filter = 'main_widget_affectable'
 st_economy_filter = 'main_widget_economy'
 st_deactivated_filter = 'main_widget_deactivated'
-
-
-def cb_set_filter(filter_name: str, widget_key: str):
-    st.toast(f"setting '{filter_name}' filter !")
-    st.session_state.global_filters[filter_name] = st.session_state[widget_key]
 
 
 def color_sur_valeur(val):
@@ -115,7 +111,6 @@ def show_main_form():
         st.session_state.offset_size = 20
     if 'last_event' not in st.session_state:
         st.session_state.last_event = 'Idle'
-#    if st_label_filter not in st.session_state:
     st.session_state[st_label_filter] = st.session_state.global_filters['label_filter']
     st.session_state[st_empty_transactions] = st.session_state.global_filters['empty_transactions']
     st.session_state[st_categorie_filter] = st.session_state.global_filters['category']

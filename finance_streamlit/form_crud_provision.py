@@ -17,6 +17,7 @@ key_amount = 'key_cp_amount'
 key_metric = 'key_cp_metric'
 key_provision_editor = 'key_provision_editor'
 key_provision_dataframe = 'key_provision_dataframe'
+key_cache_dataframe = 'key_cache_dataframe'
 
 
 def colorier_lignes_passees(row, mois_limite):
@@ -24,6 +25,19 @@ def colorier_lignes_passees(row, mois_limite):
     if row['Mois'] < mois_limite:
         return ['background-color: #f0f2f6; color: #7d8590;'] * len(row)
     return [''] * len(row)
+
+
+def get_provisions_for_year_and_year_1(category: str, group: str, year: int, is_depense: bool, is_courant: bool):
+    # 1 - On récupère le dataframe pour cette année
+    df_y = get_provisions_for_year(category, group, year, is_depense, is_courant)
+
+    # 2 - On récupère le dataframe pour l'année dernière
+    df_y_1 = get_provisions_for_year(category, group, year - 1, is_depense, is_courant)
+    df_y_1 = df_y_1.drop(columns=['Provision', 'Saisie', 'Résultat'])
+    # 3 - On merge
+    df_all = df_y_1.merge(df_y, how='outer', on='Mois', suffixes=(f" {year - 1}", ""))
+
+    return df_all
 
 
 def get_provisions_for_year(category: str, group: str, year: int, is_depense: bool, is_courant: bool):
@@ -78,11 +92,12 @@ def handle_editor_change():
 
         # Sauvegarder le DF mis à jour dans le state
         st.session_state[key_provision_dataframe] = df
+        st.session_state[key_cache_dataframe] = True
 
 
 def cb_retour_main():
     """Callback simple pour l'annulation."""
-    st.session_state.page = 'Monthly Provisions'
+    st.session_state.page = st.session_state.previous_page
 
     # Suppression du dataframe stocké dans la session
     st.session_state[key_provision_dataframe] = None
@@ -101,6 +116,7 @@ def cb_set_global_amount():
 
     st.toast(f"Global amount set to {new_value}")
 
+    st.session_state[key_cache_dataframe] = True
 
 def cb_change_group(groups: pd.DataFrame, is_courant: bool):
     group = st.session_state[key_group]
@@ -120,18 +136,13 @@ def cb_change_group(groups: pd.DataFrame, is_courant: bool):
     # on règle le contenu du text box avec la nouvelle valeur
     st.session_state[key_description] = default_value
 
-    # update the dataframe
-    st.session_state[key_provision_dataframe] = get_provisions_for_year(category, group,
-                                                                        st.session_state.current_month.year,
-                                                                        is_depense, is_courant)
-
 
 def cb_valider_transaction(datebox: date, is_courant: bool):
     """Callback exécuté lors de la validation."""
     # --- VERIFICATION OF COMPLETENESS
     if datebox is None:
         st.error('Missing Date !')
-    elif description is None:
+    elif st.session_state[key_description] == '':
         st.error('Missing Description !')
     else:
         with makesession() as s:
@@ -143,7 +154,7 @@ def cb_valider_transaction(datebox: date, is_courant: bool):
                     # si la saisie est non null, alors il faut créer une provision
                     saisie = float(df.at[i, 'Saisie'])
 
-                    if saisie > 0:
+                    if saisie != 0:
                         no_mois = int(df.at[i, 'Mois'])
                         mois = date(st.session_state.current_month.year, no_mois, 1)
 
@@ -154,7 +165,7 @@ def cb_valider_transaction(datebox: date, is_courant: bool):
                         editable.label_utilisateur = st.session_state[key_description]
                         editable.economie = 'false' if is_courant else 'true'
                         editable.date = datebox
-                        editable.mois = st.session_state.current_month
+                        editable.mois = mois
                         is_depense = st.session_state.global_filters['is_depense']
                         if is_depense:
                             editable.provision_payer = saisie
@@ -181,13 +192,14 @@ def cb_valider_transaction(datebox: date, is_courant: bool):
         # 3. Changement de page
         st.toast('Provisions created !')
         st.session_state.last_event = f'Transaction updated'
-        st.session_state.page = 'Monthly Provisions'
 
 
 def create_provision(is_courant: bool):
+    if not key_cache_dataframe in st.session_state:
+        st.session_state[key_cache_dataframe] = False
+
     is_depense = st.session_state.global_filters['is_depense']
     category = st.session_state.global_filters['category']
-    previous_provision = st.session_state.current_consumption
     editable = Mouvement()
 
     st.title(f"✍️ Créer une provision de type {'Dépense' if is_depense else 'Recette'}")
@@ -203,6 +215,7 @@ def create_provision(is_courant: bool):
                                                       month=st.session_state.current_month,
                                                       number_months=1,
                                                       economy_mode=not is_courant)
+        # Sert uniquement à récupérer les combinaisons de libellé groupe (pattern) & classes associées
         groups = get_groups(s)
 
     # --- VALEURS PAR DEFAUT ---*
@@ -224,7 +237,8 @@ def create_provision(is_courant: bool):
 
     col_amount, col_spread = st.columns(2)
     with col_amount:
-        st.text_input('Saisie Globale', value=0, help='Si vous voulez appliquer un montant global', key=key_amount)
+        st.number_input('Saisie Globale', value=0.0, step=0.01, help='Si vous voulez appliquer un montant global',
+                        key=key_amount)
     with col_spread:
         st.space()
         st.button('Fill Down', on_click=cb_set_global_amount)
@@ -233,10 +247,13 @@ def create_provision(is_courant: bool):
     if key_provision_dataframe not in st.session_state:
         st.session_state[key_provision_dataframe] = None
 
-    if st.session_state[key_provision_dataframe] is None:
-        st.session_state[key_provision_dataframe] = get_provisions_for_year(category, group,
-                                                                            st.session_state.current_month.year,
-                                                                            is_depense, is_courant)
+    if not st.session_state[key_cache_dataframe]:
+        st.session_state[key_provision_dataframe] = get_provisions_for_year_and_year_1(category, group,
+                                                                                       st.session_state.current_month.year,
+                                                                                       is_depense, is_courant)
+
+    # On remet le cache à False pour forcer un rafraîchissement
+    st.session_state[key_cache_dataframe] = False
 
     df_styled = st.session_state[key_provision_dataframe].style.apply(colorier_lignes_passees, axis=1,
                                                                       args=(st.session_state.current_month.month,))
@@ -248,8 +265,15 @@ def create_provision(is_courant: bool):
             "Provision": st.column_config.NumberColumn("Provision (€)", disabled=True, format="%.2f"),
             "Dépense": st.column_config.NumberColumn("Dépense (€)", disabled=True,
                                                      format="%.2f"),
+            f"Dépense {st.session_state.current_month.year - 1}": st.column_config.NumberColumn(
+                f"Dépense {st.session_state.current_month.year - 1} (€)", disabled=True,
+                format="%.2f"),
             "Recette": st.column_config.NumberColumn("Recette (€)", disabled=True,
                                                      format="%.2f"),
+            f"Recette {st.session_state.current_month.year - 1}": st.column_config.NumberColumn(
+                f"Recette {st.session_state.current_month.year - 1}(€)",
+                disabled=True,
+                format="%.2f"),
             "Saisie": st.column_config.NumberColumn("Nouvelle Saisie (€)", format="%.2f"),
             "Résultat": st.column_config.NumberColumn("Résultat final (€)", disabled=True, format="%.2f")})
 

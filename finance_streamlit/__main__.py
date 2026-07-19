@@ -2,13 +2,16 @@ import streamlit as st
 import sys
 import os
 
-
 # Récupère le chemin du dossier parent (FinanceGUI)
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 # L'ajoute au chemin de recherche de Python s'il n'y est pas déjà
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
+
+from finance_streamlit.common import PAGE_MAIN, PAGE_DASHBOARD, PAGE_MONTHLY_PROVISIONS, PAGE_YEARLY_PROVISIONS, \
+    PAGE_SALARIES, PAGE_PATTERN_CHECK, PAGE_MAPS, PAGE_FACTS, PAGE_COMPTES, PAGE_CATEGORIES, PAGE_JOBS, PAGE_IMPOTS, \
+    PAGE_NEW_TRANSACTION, PAGE_EDIT_TRANSACTION, PAGE_NEW_PROVISION, PAGE_LINK, PAGE_SALAIRES_NEW
 
 from engines import makesession
 from finance_streamlit.form_jobs import view_log
@@ -22,27 +25,11 @@ from finance_streamlit.form_salaries import manage_salaries
 from finance_streamlit.form_yearly_provisions import show_yearly_provisions
 from finance_streamlit.form_dashboard import show_dashboard
 from finance_streamlit.form_link import manage_links
+from finance_streamlit.form_salaires_new import render_salaires_page
 from form_main import show_main_form
 from form_crud_transaction import edit_transaction
 from form_crud_provision import create_provision
-
-# --- REFERENTIEL DES PAGES ---
-PAGE_MAIN = 'Main'
-PAGE_DASHBOARD = 'Dashboard'
-PAGE_MONTHLY_PROVISIONS = 'Monthly Provisions'
-PAGE_YEARLY_PROVISIONS = 'Yearly Provisions'
-PAGE_SALARIES = 'Salaries'
-PAGE_PATTERN_CHECK = 'Pattern Check'
-PAGE_MAPS = 'Maps'
-PAGE_FACTS = 'Facts'
-PAGE_COMPTES = 'Comptes'
-PAGE_CATEGORIES = 'Catégories'
-PAGE_JOBS = 'Jobs'
-
-PAGE_NEW_TRANSACTION = 'New Transaction'
-PAGE_EDIT_TRANSACTION = 'Edit Transaction'
-PAGE_NEW_PROVISION = 'New Provision'
-PAGE_LINK = 'Link'
+from form_impots import view_gestion_impots
 
 # --- FILTRES
 if 'global_filters' not in st.session_state:
@@ -63,6 +50,8 @@ if 'page' not in st.session_state:
     st.session_state.page = PAGE_MAIN
 if 'log' not in st.session_state:
     st.session_state.log = []
+if 'previous_page' not in st.session_state:
+    st.session_state.previous_page = ''
 
 # --- CONFIGURATION ET STYLE ---
 st.set_page_config(page_title="Finance Interface", layout="wide")
@@ -105,6 +94,12 @@ with st.sidebar:
 
     if st.button(PAGE_JOBS, width='stretch'):
         st.session_state.page = PAGE_JOBS
+
+    if st.button(PAGE_IMPOTS, width='stretch'):
+        st.session_state.page = PAGE_IMPOTS
+
+    if st.button(PAGE_SALAIRES_NEW, width='stretch'):
+        st.session_state.page = PAGE_SALAIRES_NEW
 
     st.divider()
 
@@ -153,3 +148,8 @@ if st.session_state.page == PAGE_LINK:
     manage_links()
 if st.session_state.page == PAGE_JOBS:
     view_log()
+if st.session_state.page == PAGE_IMPOTS:
+    view_gestion_impots()
+if st.session_state.page == PAGE_SALAIRES_NEW:
+    with makesession() as session:
+        render_salaires_page(session)

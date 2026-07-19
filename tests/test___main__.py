@@ -9,4 +9,3 @@ class Test(TestCase):
     def test_get_custom_split(self):
         result, months = form_get_custom_split(random.randint(2, 5), round(random.random() * 200, 2), datetime.date(2025, 2, 1))
         print(result)
-        print(months)

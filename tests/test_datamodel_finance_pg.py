@@ -1,10 +1,12 @@
 import datetime
 from unittest import TestCase
+from unittest.mock import patch, MagicMock
 
 import pandas as pd
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from datamodel import LabelPrettifier
+from datamodel import LabelPrettifier, ViewBilansAgregation, Mouvement
 from functions import get_categorized_provisions, get_events, get_solde, get_salaries, get_max_number, get_balances, \
     get_jobs, get_numeros_reference
 from engines import get_pgfin_engine
@@ -79,6 +81,14 @@ class TestORM(TestCase):
     def tearDown(self):
         self.eng.dispose()
 
+class TestViewBilans(TestCase):
+    def test_view_bilans(self):
+        e = get_pgfin_engine()
+        with Session(e) as session:
+            vb = session.scalars(select(ViewBilansAgregation).limit(1))
+
+        print(vb)
+
 
 class TestPrettifier(TestCase):
     def test_prettifier(self):
@@ -87,3 +97,5 @@ class TestPrettifier(TestCase):
         testlabel = 'Paiement Par Carte X5799 Caliceo Sce Sainte F 11/06 '
         replaced = rplc.clean_label(testlabel)
         self.assertEqual('Caliceo Sce Sainte F 11/06 ', replaced)
+
+

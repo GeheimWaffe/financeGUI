@@ -3,12 +3,14 @@ import datetime as dt
 from datetime import date, datetime, timedelta
 from typing import Iterable
 
+import numpy as np
 import pandas as pd
+import sqlalchemy
 from sqlalchemy import Engine, select, and_, or_, not_, MetaData, Table, Column, String, func, Date, Numeric
 from sqlalchemy.orm import Session
 
 import engines
-from datamodel import Compte, Mouvement, Job, Categorie, MapCategorie, LabelPrettifier, MapSalaire
+from datamodel import Compte, Mouvement, Job, Categorie, MapCategorie, LabelPrettifier, MapSalaire, ViewBilansAgregation
 from dateutil import relativedelta
 
 
@@ -48,7 +50,8 @@ def fetch_mouvements(s: Session, view: Iterable, offset_size, offset=0, search_f
         Mouvement.date_out_of_bound == False)
 
     if search_filter:
-        stmt = stmt.where(Mouvement.description.ilike(f"%%{search_filter}%%"))
+        stmt = stmt.where(or_(Mouvement.description.ilike(f"%%{search_filter}%%"),
+                              Mouvement.label_utilisateur.ilike(f"%%{search_filter}%%")))
     if not category_filter is None:
         stmt = stmt.where(Mouvement.categorie == category_filter)
     if not compte_filter is None:
@@ -116,7 +119,8 @@ def get_categorized_provisions(s: Session, category_filter: str, month: date, nu
 
     :returns: A dataframe with following columns :
     - Group
-    - Mois (date)
+    - Année (int)
+    - Mois (int)
     - Provision à payer
     - Dépense
     - Provision à récupérer
@@ -127,9 +131,10 @@ def get_categorized_provisions(s: Session, category_filter: str, month: date, nu
     str_economy = 'true' if economy_mode else 'false'
     stmt = select(Mouvement.description, Mouvement.depense, Mouvement.provision_payer, Mouvement.recette,
                   Mouvement.provision_recuperer, Mouvement.mois).where(Mouvement.date_out_of_bound == False,
-                                                       Mouvement.categorie == category_filter, Mouvement.mois >= month,
-                                                       Mouvement.mois < end_month,
-                                                       Mouvement.economie == str_economy)
+                                                                       Mouvement.categorie == category_filter,
+                                                                       Mouvement.mois >= month,
+                                                                       Mouvement.mois < end_month,
+                                                                       Mouvement.economie == str_economy)
 
     df_classes = get_groups(s)
 
@@ -575,19 +580,183 @@ def save_capital_reimbursements(e: Engine, reimbursement_scheme: pd.Series, targ
         session.commit()
 
 
-def get_history_of_provisions(is_depense: bool):
-    """ Cette fonction crée un dataframe avec
-    12 lignes : 1 par mois
-    une colonne : dépense ou recette de l'année précédente, pour la catégorie et le pattern sélectionné
-    une colonne : dépense ou recette de l'année en cours, pour la catégorie et le pattern sélectionné
-    une colonne : provision pour l'année" en cours, pour la catégorie et le pattern sélectionné """
+def get_yearly_bilan(session: Session, annee: int, is_courant: bool) -> pd.DataFrame:
+    """
+        Génère un bilan financier annuel comparatif (A vs A-1) par catégorie.
+
+        Cette fonction extrait et fusionne les données de la table `Categorie` et de la
+        vue d'agrégation `view_bilans_agregation`. Elle calcule les enveloppes réelles globales
+        (flux + restants provisionnés) pour l'année précédente (A-1) et extrait les cibles
+        provisionnées globales de l'année en cours (A), selon le mode choisi (Courant ou Économisé).
+
+        Parameters
+        ----------
+        session : Session
+            Instance de session SQLAlchemy active pour interroger la base de données.
+        annee : int
+            L'année cible (A) pour le bilan (ex: 2026). Détermine aussi l'année A-1 (ex: 2025).
+        is_courant : bool
+            Si True, traite les flux du mode 'Courante'.
+            Si False, traite les flux du mode 'Économisée'.
+
+        Returns
+        -------
+        pd.DataFrame
+            Un DataFrame trié par l'ordre des catégories contenant les colonnes suivantes :
+
+            * `categorie` (str) :
+                Le nom de l'axe budgétaire / catégorie (provenant de `Categorie.categorie`).
+            * `categorie_groupe` (str) :
+                Le groupe d'appartenance de la catégorie (ex: 'Fixe', 'Variable').
+            * `categorie_order` (int) :
+                L'index numérique servant à ordonner le tableau pour l'affichage.
+            * `Dépense [Courante|Économisée] [annee - 1]` (float) :
+                Cumul pour l'année A-1 des dépenses réelles et des provisions restantes.
+                (Calculé via : Dépense + Dépense Provisionnée restante).
+            * `Dépense [Courante|Économisée] [annee]` (float) :
+                Enveloppe totale théorique provisionnée pour les dépenses de l'année en cours A.
+                (Mappé depuis la colonne Provisionnée globale de l'année A).
+            * `Recette [Courante|Économisée] [annee - 1]` (float) :
+                Cumul pour l'année A-1 des recettes réelles et des provisions restantes.
+                (Calculé via : Recette + Recette Provisionnée restante).
+            * `Recette [Courante|Économisée] [annee]` (float) :
+                Enveloppe totale théorique provisionnée pour les recettes de l'année en cours A.
+                (Mappé depuis la colonne Provisionnée globale de l'année A).
+
+        Notes
+        -----
+        - Les en-têtes financiers s'adaptent de manière dynamique. Par exemple, si `annee=2026`
+          et `is_courant=True`, les colonnes générées seront :
+          `Dépense Courante 2025`, `Dépense Courante 2026`, `Recette Courante 2025`, `Recette Courante 2026`.
+        - Toutes les valeurs manquantes (NaN) issues des jointures à gauche (`LEFT JOIN`)
+          sont nettoyées et remplacées par `0.0`.
+        """
+
+    # --- Code de la fonction ---
+    mode_label = "Courante" if is_courant else "Économisée"
+
+    col_cat = Categorie.categorie.name
+    col_dep_a_1 = f"Dépense {mode_label} {annee - 1}"
+    col_rec_a_1 = f"Recette {mode_label} {annee - 1}"
+    col_dep_a = f"Dépense {mode_label} {annee}"
+    col_rec_a = f"Recette {mode_label} {annee}"
+
+    # --- Récupérer les catégories
+    cat_stmt = (
+        select(
+            Categorie.categorie_groupe,
+            Categorie.categorie_order,
+            Categorie.categorie
+        )
+    )
+    df_categories = pd.read_sql_query(cat_stmt, session.bind)
+
+    # Enveloppes de recettes et dépenses réelles (A-1)
+    prop_recette = ViewBilansAgregation.Recette_Courante if is_courant else ViewBilansAgregation.Recette_Economisee
+    prop_depense = ViewBilansAgregation.Dépense_Courante if is_courant else ViewBilansAgregation.Dépense_Economisee
+
+    # Enveloppes restantes (A-1 ou A selon la colonne)
+    prop_recette_restante = ViewBilansAgregation.Recette_Courante_Provisionnée_restante if is_courant else ViewBilansAgregation.Recette_Economisée_Provisionnée_restante
+    prop_depense_non_epui = ViewBilansAgregation.Dépense_Courante_Provisionnée_non_épuisée if is_courant else ViewBilansAgregation.Dépense_Economisée_Provisionnée_restante
+
+    # Enveloppes globales de provisions (Année A)
+    prop_prov_depense_a = ViewBilansAgregation.Dépense_Courante_Provisionnée if is_courant else ViewBilansAgregation.Dépense_Economisée_Provisionnée
+    prop_prov_recette_a = ViewBilansAgregation.Recette_Courante_Provisionnée if is_courant else ViewBilansAgregation.Recette_Economisée_Provisionnée
+
+    data_stmt = (
+        select(
+            ViewBilansAgregation.Catégorie.label(col_cat),
+            ViewBilansAgregation.Mois_Year.label("Annee"),
+            (prop_recette + prop_recette_restante).label(col_rec_a_1),
+            (prop_depense + prop_depense_non_epui).label(col_dep_a_1),
+            prop_prov_depense_a.label(col_dep_a),
+            prop_prov_recette_a.label(col_rec_a)
+        )
+        .where(
+            or_(
+                ViewBilansAgregation.Mois_Year == float(annee),
+                ViewBilansAgregation.Mois_Year == float(annee - 1)
+            )
+        )
+    )
+    df_data = pd.read_sql_query(data_stmt, session.bind)
+
+    cols_finales = list(df_categories.columns) + [col_dep_a_1, col_dep_a, col_rec_a_1, col_rec_a]
+
+    if df_data.empty:
+        return pd.DataFrame(columns=cols_finales)
+
+    df_a_moins_1 = df_data[df_data["Annee"] == float(annee - 1)][[
+        col_cat, col_dep_a_1, col_rec_a_1]]
+
+    df_annee_a = df_data[df_data["Annee"] == float(annee)][[
+        col_cat, col_dep_a, col_rec_a]]
+
+    df_a_moins_1 = df_a_moins_1.groupby(col_cat, as_index=False).sum()
+    df_annee_a = df_annee_a.groupby(col_cat, as_index=False).sum()
+
+    result = pd.merge(df_categories, df_a_moins_1, on=col_cat, how="left")
+    result = pd.merge(result, df_annee_a, on=col_cat, how="left")
+
+    cols_numeriques = cols_finales[3:]
+    result[cols_numeriques] = result[cols_numeriques].fillna(0.0)
+
+    # Calculer l'indicateur
+    # =========================================================================
+    # AJOUT DES COLONNES CONDITIONNELLES (ALERTES / STATUTS)
+    # =========================================================================
+    col_statut_dep = f"Statut Dépense {annee}"
+    col_statut_rec = f"Statut Recette {annee}"
+
+    # Condition pour les Dépenses : Présente en A-1 mais absente/nulle en A
+    # Logique NumPy : np.where(condition, valeur_si_vrai, valeur_si_faux)
+    result[col_statut_dep] = np.where(
+        (result[col_dep_a_1] != 0.0) & (result[col_dep_a] == 0.0),
+        "⚠️",
+        "✅"
+    )
+
+    result[col_statut_rec] = np.where(
+        (result[col_rec_a_1] != 0.0) & (result[col_rec_a] == 0.0),
+        "⚠️",
+        "✅"
+    )
+    # On met à jour la liste des colonnes finales pour inclure nos statuts
+    cols_finales.extend([col_statut_dep, col_statut_rec])
+
+    # Sorting and final result
+    result = result.sort_values(by=Categorie.categorie_groupe.name).reset_index(drop=True)
+
+    return result[cols_finales]
 
 
 def get_provisions_for_month(s: Session, month: date, is_courant: bool = True) -> pd.DataFrame:
-    """ Returns all the aggregated provisions for a specific month
+    """ Returns all the aggregated provisions for a specific month.
 
-    :returns:a Dataframe with the necessary columns"""
+    The returned DataFrame dynamically adapts its data source (Courant vs Economisée)
+    depending on the `is_courant` flag, but unifies and renames the output columns
+    to maintain a consistent contract for UI rendering components.
 
+    :param s: An active SQLAlchemy Session object used to hook into the database connection.
+    :type s: sqlalchemy.orm.Session
+    :param month: The targeted month filtering the view (`view_bilans_agregation`).
+    :type month: datetime.date
+    :param is_courant: If True, queries operational columns. If False, queries savings columns.
+    :type is_courant: bool, optional
+
+    :returns: A DataFrame sorted by 'Catégorie Groupe' and 'Catégorie' containing:
+        **Catégorie Groupe** (str) : The high-level grouping category.
+        **Catégorie** (str) : The specific sub-category name.
+        **Recette** (float) : Realized revenue.
+        **Recette Provisionnée** (float) : Initially provisioned revenue.
+        **Recette Reste** (float) : Remaining provisioned revenue left to be realized.
+        **Dépense** (float) : Realized expenses.
+        **Dépense Provisionnée** (float) : Initially provisioned expenses.
+        **Dépense Reste** (float) : Non-exhausted or remaining provisioned expenses.
+        **Solde sans provisions** (float) : Raw balance excluding provisions.
+        **Solde avec provisions** (float) : Forecasted balance integrating provisions.
+    :rtype: pandas.DataFrame
+    """
     metadata_obj = MetaData()
     provisions = Table('view_bilans_agregation',
                        metadata_obj,
@@ -1022,6 +1191,7 @@ def identify_gaps(s: Session, value: MapCategorie):
     df = pd.read_sql(stmt, s.connection())
     return df
 
+
 def spread_over_year(values_df: pd.DataFrame, colonne_pivot: str) -> pd.DataFrame:
     """ Merges with a series of twelve months"""
     months = pd.DataFrame(data=[[i + 1] for i in range(12)], columns=[colonne_pivot])
@@ -1062,3 +1232,70 @@ def split_value(value: float, no_periods: int, rounding: int) -> Iterable:
     return result
 
 
+import pandas as pd
+import numpy as np
+
+
+def calculate_over_under(
+        df: pd.DataFrame,
+        column_ref: str,
+        column_val: str,
+        column_indicator: str
+) -> pd.DataFrame:
+    """
+    Calcule les écarts entre deux colonnes numériques et applique un indicateur visuel.
+
+    Cette fonction inspecte un DataFrame, vérifie la discipline des troupes (colonnes
+    existantes et types numériques), puis injecte une nouvelle colonne d'indicateurs :
+    - ⚠️ (Warning) : Si la valeur (column_val) dépasse la référence (column_ref).
+    - ✅ (OK) : Si la valeur (column_val) est inférieure ou égale à la référence (column_ref).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Le DataFrame à traiter, aligné au garde-à-vous.
+    column_ref : str
+        Le nom de la colonne servant de cible ou de budget de référence.
+    column_val : str
+        Le nom de la colonne contenant le montant réel à inspecter.
+    column_indicator : str
+        Le nom de la nouvelle colonne d'indicateurs à créer.
+
+    Returns
+    -------
+    pd.DataFrame
+        Le DataFrame enrichi de sa nouvelle colonne de combat, prêt pour l'affichage.
+
+    Raises
+    ------
+    KeyError
+        Si 'column_ref' ou 'column_val' manquent à l'appel dans le DataFrame.
+    TypeError
+        Si les colonnes cibles contiennent de la boue textuelle au lieu de données numériques.
+    """
+    # 1. INSPECTION DES TROUPES : EXISTENCE DES COLONNES
+    missing_cols = [col for col in [column_ref, column_val] if col not in df.columns]
+    if missing_cols:
+        raise KeyError(
+            f"ERREUR CRITIQUE, SERGENT ! Les colonnes suivantes manquent à l'appel : {missing_cols}"
+        )
+
+    # 2. INSPECTION DES ARMES : TYPES NUMÉRIQUES EXIGÉS
+    if not np.issubdtype(df[column_ref].dtype, np.number) or not np.issubdtype(df[column_val].dtype, np.number):
+        raise TypeError(
+            f"SABOTAGE, SERGENT ! Les colonnes '{column_ref}' et '{column_val}' "
+            f"doivent être strictement numériques ! Type actuel : {df[column_ref].dtype} et {df[column_val].dtype}"
+        )
+
+    # 3. EXÉCUTION DE LA MANŒUVRE : CALCUL ET VECTORISATION
+    # Copie de sécurité pour éviter de corrompre les données d'origine
+    df_result = df.copy()
+
+    # Règle d'engagement stricte : si val > ref -> ⚠️, sinon -> ✅
+    df_result[column_indicator] = np.where(
+        df_result[column_val] > df_result[column_ref],
+        "⚠️",
+        "✅"
+    )
+
+    return df_result

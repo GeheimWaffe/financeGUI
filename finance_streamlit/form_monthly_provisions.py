@@ -4,10 +4,10 @@ import plotly.express as px
 
 from finance_gui.__main__ import categorize_provisions
 from functions import get_provisions_for_month, makesession, get_categorized_provisions, \
-    fetch_mouvements, get_groups, close_provision, get_categories
-from datamodel import Classifier, Mouvement
+    fetch_mouvements, get_groups, close_provision, get_categories, calculate_over_under
+from datamodel import Classifier
+from common import PAGE_MAIN, custom_label_red_or_green, custom_label_month
 from datetime import date
-
 
 # --- PERSISTANCE
 # widgets
@@ -52,6 +52,7 @@ def cb_save_group():
 def cb_new_provision():
     """ Launch the creation of a new provision """
     if st.session_state.global_filters['category']:
+        st.session_state.previous_page = 'Budget Monitoring'
         st.session_state.page = 'New Provision'
     else:
         st.toast('Pas de catégorie sélectionnée !')
@@ -68,10 +69,12 @@ def cb_close_provision(remainder: float):
             st.toast('Provision closed !')
 
 
+def cb_back_to_main():
+    st.session_state.page = PAGE_MAIN
+
+
 def show_monthly_provisions():
     st.title("Provisions mensuelles")
-
-    st.divider()
 
     if not 'current_month' in st.session_state:
         st.session_state.current_month = date.today().replace(day=1)
@@ -79,55 +82,73 @@ def show_monthly_provisions():
     # setting the result
     st.session_state.current_consumption = 0.0
 
-    # --- PROVISIONS MENSUELLES
-    col_provision_type, col_previous, col_date, col_next, col_mode = st.columns(5)
+    # CHIFFRES-CLES
+    kpi_container = st.container()
+    st.divider()
+
+    # --- EN-TETE DE PAGES
+    # Barre de menus
+    col_previous, col_next, col_provision_type, col_mode, col_whitespace = st.columns([1, 1,  2, 2, 5], vertical_alignment='center')
+
+
+    with col_previous:
+        st.button("M-1️", icon="⏮️", on_click=cb_previous_month)
+
+    with col_next:
+        st.button("M+1", icon="⏭️", on_click=cb_next_month)
 
     with col_provision_type:
         is_depense = st.toggle("Dépense / Recette", value=True, key=key_is_depense, on_change=cb_is_depense)
 
-    with col_previous:
-        st.button("Previous", on_click=cb_previous_month)
-
-    with col_date:
-        st.text(st.session_state.current_month.strftime("%d/%m/%Y"))
-
-    with col_next:
-        st.button("Next", on_click=cb_next_month)
-
     with col_mode:
         is_courant = st.toggle("Courant / Economie", value=True, key=key_is_courant, on_change=cb_is_courant)
 
-    # CHIFFRES-CLES
-    kpi_container = st.container()
     st.divider()
 
     # --- TABLE DES PROVISIONS
     col_provisions, col_groups = st.columns(2)
 
     with makesession() as s:
+        print(f"Retrieving provisions, current month : {st.session_state.current_month}, is courant : {is_courant}")
         provisions = get_provisions_for_month(s, st.session_state.current_month, is_courant)
+        # Debug : print
+        #  print(provisions)
         categories = get_categories(s)
         cat_list = [c.categorie for c in categories]
 
     # Affichage des chiffres-clés
     with kpi_container:
-        metric1, metric2 = st.columns(2)
+        colmonth, metric1, metric2 = st.columns([1, 1, 1])
+        with colmonth:
+            st.markdown(custom_label_month(st.session_state.current_month), unsafe_allow_html=True)
+
         with metric1:
-            st.metric("Solde incluant Provisions", provisions['Solde avec provisions'].sum(), format="euro")
+            st.markdown(custom_label_red_or_green('Solde avec provisions', provisions['Solde avec provisions'].sum()),
+                        unsafe_allow_html=True)
         with metric2:
-            st.metric("Solde Sans Provisions", provisions['Solde sans provisions'].sum(), format="euro")
+            st.markdown(custom_label_red_or_green('Solde sans provisions', provisions['Solde sans provisions'].sum()),
+                        unsafe_allow_html=True)
 
     # tri suivant qu'on a les dépenses ou les recettes
     if is_depense:
-        directed_provisions = provisions.drop(columns=['Recette', 'Recette Provisionnée', 'Recette Reste'])
+        directed_provisions = provisions[
+            ['Catégorie Groupe', 'Catégorie', 'Dépense', 'Dépense Provisionnée', 'Dépense Reste']]
+        directed_provisions = calculate_over_under(directed_provisions, 'Dépense Provisionnée', 'Dépense', 'Check')
     else:
-        directed_provisions = provisions.drop(columns=['Dépense', 'Dépense Provisionnée', 'Dépense Reste'])
+        directed_provisions = provisions[
+            ['Catégorie Groupe', 'Catégorie', 'Recette', 'Recette Provisionnée', 'Recette Reste']]
+        directed_provisions = calculate_over_under(directed_provisions, 'Recette', 'Recette Provisionnée', 'Check')
+
+    # Debug
+    # print('Directed_provisions : on différencie suivant que ce sont des dépenses ou des recettes')
+    # print(directed_provisions)
 
     with col_provisions:
         dt_provisions = st.dataframe(directed_provisions, width='stretch', hide_index=True, on_select='rerun',
                                      selection_mode='single-cell')
 
         # --- NEW
+        st.button("Go To Category", on_click=cb_back_to_main, type='primary')
         st.selectbox('Catégorie', help='Créer une nouvelle provision', options=cat_list, index=0,
                      key=key_categorie_selectbox, on_change=cb_change_category)
         st.button('New', help='Create a new provision', on_click=cb_new_provision, type='primary')
@@ -159,7 +180,8 @@ def show_monthly_provisions():
         # Displaying the provision groups
         # Retrieve the provisions
         with makesession() as s:
-            df_groups = get_categorized_provisions(s, category_filter=category, month=st.session_state.current_month, number_months=1,
+            df_groups = get_categorized_provisions(s, category_filter=category, month=st.session_state.current_month,
+                                                   number_months=1,
                                                    economy_mode=not is_courant)
             df_groups.sort_values('Group', inplace=True)
 
